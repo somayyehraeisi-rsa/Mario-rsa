@@ -183,6 +183,9 @@
   const INVULN_TIME = 1.5;        // seconds of flashing invulnerability after a graze hit
   const RESPAWN_INVULN_TIME = 1.0;
   const MAX_LIVES = 5;
+  const EASY_STARTING_LIVES = 5;
+  const EASY_SPEED_MULT = 0.75;   // enemy speed multiplier when Easy Mode is on
+  const EASY_INVULN_MULT = 1.5;   // invulnerability-window multiplier when Easy Mode is on
 
   const GROUND_Y = 440;           // top surface of ground tiles
   const KILL_Y = 620;             // fall past this = death (pit)
@@ -211,7 +214,14 @@
     muted: Storage.get('spb_muted', false),
     reducedMotion: Storage.get('spb_reducedMotion', prefersReducedMotion),
     bestScore: Storage.get('spb_bestScore', 0),
+    easyMode: Storage.get('spb_easyMode', false),
   };
+
+  function invulnTime(base) { return settings.easyMode ? base * EASY_INVULN_MULT : base; }
+  function enemySpeedFor(type) {
+    const base = type === 'fast' ? FAST_ENEMY_SPEED : (type === 'wraith' ? WRAITH_SPEED : ENEMY_SPEED);
+    return settings.easyMode ? base * EASY_SPEED_MULT : base;
+  }
 
   function saveBestScore() {
     if (state.score > settings.bestScore) {
@@ -270,7 +280,7 @@
     function unlock() {
       ensureContext();
       if (!ctxAudio) return;
-      if (ctxAudio.state === 'suspended') ctxAudio.resume();
+      if (ctxAudio.state === 'suspended') ctxAudio.resume().catch(() => {});
       if (!unlocked) {
         unlocked = true;
         startDrone();
@@ -333,7 +343,8 @@
 
     function setPaused(paused) {
       if (!ctxAudio) return;
-      if (paused) ctxAudio.suspend(); else ctxAudio.resume();
+      const p = paused ? ctxAudio.suspend() : ctxAudio.resume();
+      if (p && p.catch) p.catch(() => {}); // e.g. suspend()/resume() racing a context that's already closing
     }
 
     return { unlock, sfx, setMuted, setPaused };
@@ -365,18 +376,22 @@
     if (gamepad.left || gamepad.right || gamepad.jump) handleFirstGesture();
   }
 
-  function handleFirstGesture() {
+  function handleFirstGesture(key) {
     Audio.unlock();
-    if (state.mode === 'intro') startPlaying();
+    // 'E' toggles Easy Mode from the intro screen without also dismissing it.
+    if (state.mode === 'intro' && key !== 'e' && key !== 'E') startPlaying();
   }
 
   window.addEventListener('keydown', (e) => {
     keys[e.key] = true;
     if (bind.jump.includes(e.key)) e.preventDefault();
-    handleFirstGesture();
+    handleFirstGesture(e.key);
 
     if (e.key === 'm' || e.key === 'M') toggleMute();
     if (e.key === 'r' || e.key === 'R') toggleReducedMotion();
+    // Easy Mode only toggles between runs (not mid-play) so a life count
+    // never jumps around while you're actually playing.
+    if ((e.key === 'e' || e.key === 'E') && state.mode !== 'playing') toggleEasyMode();
     if ((e.key === 'p' || e.key === 'P' || e.key === 'Escape') && (state.mode === 'playing' || state.paused)) togglePause();
     if (state.mode !== 'playing' && state.mode !== 'intro' && state.mode !== 'levelclear' && (e.key === 'Enter' || e.key === ' ')) resetGame();
   });
@@ -422,6 +437,11 @@
     btnPause.textContent = state.paused ? '▶' : '❙❙';
     btnPause.setAttribute('aria-label', state.paused ? 'Resume game' : 'Pause game');
     announce(state.paused ? 'Paused' : 'Resumed');
+  }
+  function toggleEasyMode() {
+    settings.easyMode = !settings.easyMode;
+    Storage.set('spb_easyMode', settings.easyMode);
+    announce(settings.easyMode ? 'Easy Mode on: more lives, slower enemies, longer invulnerability.' : 'Easy Mode off.');
   }
   if (settings.muted) { btnMute.textContent = '\u{1F507}'; }
 
@@ -484,7 +504,9 @@
         { x: 2560, y: 90 }, { x: 2585, y: 85 }, { x: 2610, y: 90 },
       ],
       mushrooms: [
-        { x: 500, y: GROUND_Y - 24 }, { x: 1600, y: 290 }, { x: 2500, y: GROUND_Y - 24 }, { x: 3000, y: 310 },
+        // x=2730 sits on the platform at rect(2680,300,100,24), off enemy3's
+        // ground-level patrol (1900-2700) - it used to sit right in that lane.
+        { x: 500, y: GROUND_Y - 24 }, { x: 1600, y: 290 }, { x: 2730, y: 276 }, { x: 3000, y: 310 },
       ],
       enemies: [
         // Kept off the opening run (x < 550, where the first checkpoint and
@@ -533,7 +555,9 @@
         { x: 2770, y: 300 }, { x: 3110, y: 260 }, { x: 3290, y: 190 }, { x: 3510, y: 300 },
       ],
       mushrooms: [
-        { x: 700, y: GROUND_Y - 24 }, { x: 1900, y: GROUND_Y - 24 }, { x: 3200, y: 260 },
+        // x=2700 sits before the wraith's patrol/altitude band (2800-3300,
+        // y 190-270) - it used to sit inside that band.
+        { x: 700, y: GROUND_Y - 24 }, { x: 1900, y: GROUND_Y - 24 }, { x: 2700, y: GROUND_Y - 24 },
       ],
       enemies: [
         makeEnemyDef(500, GROUND_Y - 28, 350, 650, 'fast'),
@@ -614,7 +638,7 @@
   }
 
   function makeEnemy(def) {
-    const speed = def.type === 'fast' ? FAST_ENEMY_SPEED : (def.type === 'wraith' ? WRAITH_SPEED : ENEMY_SPEED);
+    const speed = enemySpeedFor(def.type);
     return {
       x: def.x, y: def.y, w: 30, h: 28,
       vx: -speed, vy: 0,
@@ -661,17 +685,19 @@
     };
     stars = buildStars(def.width);
     player = makePlayer();
-    player.invuln = RESPAWN_INVULN_TIME; // brief grace period so a fresh spawn can't be grazed instantly
+    player.invuln = invulnTime(RESPAWN_INVULN_TIME); // brief grace period so a fresh spawn can't be grazed instantly
     state.cameraX = 0;
     Particles.clear();
     levelLabel.textContent = 'Level ' + (index + 1) + ': ' + def.name;
   }
 
+  function startingLives() { return settings.easyMode ? EASY_STARTING_LIVES : 3; }
+
   function resetGame() {
     state.mode = 'playing';
     state.paused = false;
     state.score = 0;
-    state.lives = 3;
+    state.lives = startingLives();
     state.levelIndex = 0;
     state.coinsCollectedTotal = 0;
     state.elapsedTime = 0;
@@ -680,6 +706,7 @@
 
   function startPlaying() {
     state.mode = 'playing';
+    state.lives = startingLives();
     state.elapsedTime = 0;
     loadLevel(0);
     announce('Game started. Level 1: ' + LEVELS[0].name);
@@ -803,7 +830,7 @@
       player.x = current.checkpointX;
       player.y = GROUND_Y - player.h;
       player.vx = 0; player.vy = 0;
-      player.invuln = RESPAWN_INVULN_TIME;
+      player.invuln = invulnTime(RESPAWN_INVULN_TIME);
       return;
     }
 
@@ -854,7 +881,7 @@
         state.lives--;
         Audio.sfx.hurt();
         announce(state.lives > 0 ? ('Hit! ' + state.lives + ' lives left.') : 'Hit! Game over.');
-        p.invuln = INVULN_TIME;
+        p.invuln = invulnTime(INVULN_TIME);
         // Knockback away from the enemy - the player keeps their position and
         // progress instead of being teleported back to the level start.
         p.vx = (p.x < en.x ? -1 : 1) * 220;
@@ -886,12 +913,13 @@
       en.t += dt;
 
       if (en.type === 'wraith') {
+        const speed = enemySpeedFor('wraith');
         en.x += en.vx * dt;
         en.y = en.baseY + Math.sin(en.t * WRAITH_FREQ) * WRAITH_AMPLITUDE;
-        if (en.x <= en.patrolMin) { en.x = en.patrolMin; en.vx = WRAITH_SPEED; }
-        if (en.x + en.w >= en.patrolMax) { en.x = en.patrolMax - en.w; en.vx = -WRAITH_SPEED; }
+        if (en.x <= en.patrolMin) { en.x = en.patrolMin; en.vx = speed; }
+        if (en.x + en.w >= en.patrolMax) { en.x = en.patrolMax - en.w; en.vx = -speed; }
       } else {
-        const speed = en.type === 'fast' ? FAST_ENEMY_SPEED : ENEMY_SPEED;
+        const speed = enemySpeedFor(en.type);
         en.vy += GRAVITY * dt;
         en.vy = Math.min(MAX_FALL_SPEED, en.vy);
         moveAndCollide(en, en.vx * dt, en.vy * dt);
@@ -1330,10 +1358,14 @@
       'Move: ← → / A D      Jump: Space / ↑ / W',
       'Hold Jump longer to jump higher. Stomp foes from above.',
       'Grab mushrooms for an extra life. Pass checkpoints to save progress.',
-      'P = Pause    M = Mute    R = Reduced motion',
+      'P = Pause    M = Mute    R = Reduced motion    E = Easy Mode',
       isTouchDevice ? 'Or use the on-screen touch controls below.' : '',
     ];
     lines.forEach((line, i) => { if (line) ctx.fillText(line, VIEW_W / 2, VIEW_H / 2 - 10 + i * 24); });
+
+    ctx.fillStyle = settings.easyMode ? '#7fffd4' : '#888';
+    ctx.font = '14px monospace';
+    ctx.fillText('Easy Mode: ' + (settings.easyMode ? 'ON (more lives, slower enemies)' : 'off') + ' - press E to toggle', VIEW_W / 2, VIEW_H / 2 + 90);
 
     ctx.fillStyle = '#ffd23f';
     ctx.font = 'bold 18px monospace';
@@ -1367,6 +1399,12 @@
     ctx.font = 'bold 44px monospace';
     ctx.fillText(state.mode === 'victory' ? 'YOU WIN!' : 'GAME OVER', VIEW_W / 2, VIEW_H / 2 - 50);
 
+    if (state.mode === 'victory') {
+      ctx.fillStyle = '#d9b8ff';
+      ctx.font = 'italic 14px monospace';
+      ctx.fillText('The moon fades. The ruins fall silent behind you at last. Thanks for playing.', VIEW_W / 2, VIEW_H / 2 - 26);
+    }
+
     ctx.fillStyle = '#fff';
     ctx.font = '18px monospace';
     ctx.fillText('Final Score: ' + state.score + '   Best: ' + settings.bestScore, VIEW_W / 2, VIEW_H / 2 - 8);
@@ -1376,7 +1414,7 @@
     if (top.length) {
       ctx.font = '13px monospace';
       ctx.fillStyle = '#aaa';
-      ctx.fillText('Top scores: ' + top.slice(0, 3).map((e) => e.score + (e.won ? '*' : '')).join('  ·  '), VIEW_W / 2, VIEW_H / 2 + 42);
+      ctx.fillText('Top scores: ' + top.slice(0, 3).map((e) => e.score + (e.won ? ' (win)' : '')).join('  ·  '), VIEW_W / 2, VIEW_H / 2 + 42);
     }
 
     ctx.fillStyle = '#fff';
@@ -1419,10 +1457,16 @@
   // single unexpected exception logs instead of freezing the whole game.
   // ---------------------------------------------------------------------
   let lastTime = null;
+  const frameTimes = []; // last N real (unclamped) frame durations, ms - for the QA perf hook below
+  const FRAME_HISTORY = 120;
 
   function frame(timestamp) {
     if (lastTime === null) lastTime = timestamp;
-    let dt = (timestamp - lastTime) / 1000;
+    const rawDtMs = timestamp - lastTime;
+    frameTimes.push(rawDtMs);
+    if (frameTimes.length > FRAME_HISTORY) frameTimes.shift();
+
+    let dt = rawDtMs / 1000;
     dt = Math.min(Math.max(dt, 0), 1 / 30); // clamp so tab-switching doesn't cause tunneling
     lastTime = timestamp;
 
@@ -1448,7 +1492,17 @@
     getState: () => ({ mode: state.mode, paused: state.paused, score: state.score, lives: state.lives, levelIndex: state.levelIndex, elapsedTime: state.elapsedTime }),
     getPlayer: () => ({ x: player.x, y: player.y, vx: player.vx, vy: player.vy, invuln: player.invuln }),
     getLevel: () => ({ checkpointX: current.checkpointX, coinsTaken: current.coins.filter(c => c.taken).length, coinsTotal: current.coins.length, enemiesAlive: current.enemies.filter(e => e.alive).length, enemies: current.enemies.map(e => ({ x: e.x, y: e.y, alive: e.alive, type: e.type })) }),
-    getSettings: () => ({ muted: settings.muted, reducedMotion: settings.reducedMotion, bestScore: settings.bestScore }),
+    getSettings: () => ({ muted: settings.muted, reducedMotion: settings.reducedMotion, bestScore: settings.bestScore, easyMode: settings.easyMode }),
+    getPerf: () => {
+      if (!frameTimes.length) return { avgMs: 0, maxMs: 0, samples: 0, avgFps: 0 };
+      const avgMs = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
+      return { avgMs, maxMs: Math.max(...frameTimes), samples: frameTimes.length, avgFps: avgMs > 0 ? 1000 / avgMs : 0 };
+    },
+    spawnStressEnemies: (count) => {
+      for (let i = 0; i < count; i++) {
+        current.enemies.push(makeEnemy({ x: 100 + (i % 20) * 60, y: GROUND_Y - 28, patrolMin: 60, patrolMax: current.def.width - 60, type: i % 2 ? 'fast' : 'stalker' }));
+      }
+    },
     // QA-only conveniences below (not reachable from normal play input):
     teleport: (x, y) => { player.x = x; player.y = (y !== undefined ? y : GROUND_Y - player.h); player.vx = 0; player.vy = 0; },
     jumpToLevel: (i) => { state.levelIndex = i; loadLevel(i); state.mode = 'playing'; },
