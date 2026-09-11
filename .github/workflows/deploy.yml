@@ -2,7 +2,7 @@ name: Deploy Mario game to server
 
 on:
   push:
-    branches: [claude/cool-albattani-5lyj8f, claude/vigilant-brown-rx26w6]
+    branches: [claude/cool-albattani-5lyj8f, claude/vigilant-brown-rx26w6, claude/kind-curie-n86phu]
   workflow_dispatch: {}
 
 jobs:
