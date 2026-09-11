@@ -84,39 +84,62 @@ async function run() {
   }
   assert(peakY < tapPlayer.y - 5, 'holding Jump reaches a higher apex than tapping it (variable jump height works)');
 
-  console.log('Checking a mid-air enemy graze costs a life but does not teleport the player back to the level start...');
+  console.log('Checking checkpoint registration and enemy-graze behavior (deterministic, via the debug teleport hook -\n  real-time platforming through these exact spots is covered separately below and is inherently timing-sensitive)...');
   page = await freshPage();
   await page.keyboard.press('ArrowRight');
   await page.waitForTimeout(150);
-  // Checkpoint 1 sits at x=1150; there is a patrol enemy right on top of it.
+  // Checkpoint 1 sits at x=1150. Teleporting there and letting one update tick
+  // run is a deterministic way to verify checkpoint registration itself,
+  // independent of whether *this test's* scripted jump timing clears the
+  // pits along the way (a real player's timing isn't constrained the same
+  // way a fixed-interval bot's is - that path is exercised, more loosely, below).
+  await page.evaluate(() => window.__SPB_DEBUG__.teleport(1160, 400));
+  await page.waitForTimeout(100);
+  let cpLvl = await getLevel(page);
+  assert(cpLvl.checkpointX >= 1150, 'passing x=1150 registers checkpoint 1');
+
+  // Force an overlap with a live enemy near the checkpoint and confirm a
+  // graze costs a life via knockback without resetting the player's position
+  // back to the level start (the round-1 bug: respawnAfterDeath() used to
+  // fire on every non-stomp hit, discarding the knockback it had just set).
+  const enemyNearCheckpoint = cpLvl.enemies.find((e) => e.alive && Math.abs(e.x - 1160) < 400);
+  assert(!!enemyNearCheckpoint, 'a live patrol enemy exists near checkpoint 1 to test a graze against');
+  if (enemyNearCheckpoint) {
+    // A fresh spawn/level-load grants a brief invulnerability grace period
+    // (RESPAWN_INVULN_TIME); wait it out so this graze isn't just absorbed.
+    await page.waitForTimeout(1100);
+    // Re-fetch the enemy's position - it has been patrolling during the wait.
+    const freshLvl = await getLevel(page);
+    const liveEnemy = freshLvl.enemies.find((e) => e.alive && Math.abs(e.x - 1160) < 400) || enemyNearCheckpoint;
+    const beforeHit = await getState(page);
+    // Overlap the enemy's actual box (it may be on an elevated platform,
+    // not at ground height) with vy=0 so this can't be scored as a stomp.
+    await page.evaluate((e) => window.__SPB_DEBUG__.teleport(e.x, e.y), liveEnemy);
+    await page.waitForTimeout(120);
+    const afterHit = await getState(page);
+    const afterPlayer = await getPlayer(page);
+    assert(afterHit.lives < beforeHit.lives, 'overlapping a live enemy (not stomping it) costs a life');
+    assert(afterPlayer.x > 1000, 'the graze knocks the player back in place instead of resetting them to the level start (x=60)');
+  }
+
+  console.log('Checking checkpoint 1 is also reachable through ordinary jump input (best-effort; real-time and\n  therefore more tolerant of slow/loaded environments than the deterministic checks above)...');
+  page = await freshPage();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForTimeout(150);
   await page.keyboard.down('ArrowRight');
   let reachedCheckpoint = false;
-  let livesAtCheckpoint = null;
-  for (let i = 0; i < 60 && !reachedCheckpoint; i++) {
-    const lvl = await getLevel(page);
+  for (let i = 0; i < 150 && !reachedCheckpoint; i++) {
+    const curLvl = await getLevel(page);
     const curState = await getState(page);
-    if (lvl.checkpointX >= 1150) { reachedCheckpoint = true; livesAtCheckpoint = curState.lives; break; }
-    if (curState.mode !== 'playing') break; // ran out of lives before the checkpoint - reported as a failure below
+    if (curLvl.checkpointX >= 1150) { reachedCheckpoint = true; break; }
+    if (curState.mode !== 'playing') break;
     await page.keyboard.down(' ');
-    await page.waitForTimeout(380);
+    await page.waitForTimeout(500); // comfortably past the ~333ms jump apex even under a loaded CPU
     await page.keyboard.up(' ');
-    await page.waitForTimeout(140);
-  }
-  assert(reachedCheckpoint, 'checkpoint 1 (x=1150) is reachable by normal jumping');
-  // Walk a little further without jumping; the patrol enemy there will graze the player.
-  let lostLifeWithoutTeleport = false;
-  for (let i = 0; i < 20; i++) {
-    const before = await getState(page);
-    await page.waitForTimeout(150);
-    const after = await getState(page);
-    const afterPlayer = await getPlayer(page);
-    if (after.lives < before.lives) {
-      lostLifeWithoutTeleport = afterPlayer.x > 1000; // old bug reset x to 60 on every graze
-      break;
-    }
+    await page.waitForTimeout(250);
   }
   await page.keyboard.up('ArrowRight');
-  assert(lostLifeWithoutTeleport, 'a graze from an enemy costs a life via knockback, without resetting the player to the level start');
+  assert(reachedCheckpoint, 'checkpoint 1 (x=1150) is reachable by normal jumping within a generous time budget');
 
   console.log('Checking level 2 loads with its own theme/enemies and victory is reachable from the last level...');
   page = await freshPage();

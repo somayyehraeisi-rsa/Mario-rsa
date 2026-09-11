@@ -122,11 +122,12 @@
 <div id="gameWrap">
   <div id="title">SUPER PLUMBER BROS</div>
   <div id="topBar">
-    <span id="levelLabel">Level 1</span>
+    <span><span id="levelLabel">Level 1</span> &nbsp;&middot;&nbsp; <span id="timeLabel">0:00</span></span>
     <span class="buttons">
       <button id="btnPause" class="iconBtn" type="button" aria-label="Pause game">&#10074;&#10074;</button>
       <button id="btnMute" class="iconBtn" type="button" aria-label="Mute sound">&#128266;</button>
       <button id="btnMotion" class="iconBtn" type="button" aria-label="Toggle reduced motion">&#10024;</button>
+      <button id="btnTitle" class="iconBtn" type="button" aria-label="Return to title screen">&#8962;</button>
     </span>
   </div>
   <canvas id="game" width="800" height="480" role="img" aria-label="Platformer game canvas. Use the on-screen HUD readout below for score, lives and progress."></canvas>
@@ -218,6 +219,26 @@
       Storage.set('spb_bestScore', settings.bestScore);
     }
   }
+
+  function formatTime(seconds) {
+    const s = Math.max(0, Math.floor(seconds));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  // A small local top-5 leaderboard (score + time), so there is something
+  // to chase across replays beyond a single best-score number.
+  const Leaderboard = {
+    key: 'spb_leaderboard',
+    load() { return Storage.get(Leaderboard.key, []); },
+    submit(score, timeSeconds, won) {
+      const list = Leaderboard.load();
+      list.push({ score, time: timeSeconds, won, date: new Date().toISOString().slice(0, 10) });
+      list.sort((a, b) => b.score - a.score);
+      const top = list.slice(0, 5);
+      Storage.set(Leaderboard.key, top);
+      return top;
+    },
+  };
 
   // ---------------------------------------------------------------------
   // Accessibility: a visually-hidden live region for screen readers
@@ -323,9 +344,26 @@
   // ---------------------------------------------------------------------
   const keys = {};
   const touch = { left: false, right: false, jump: false };
+  const gamepad = { left: false, right: false, jump: false };
   const bind = { left: ['ArrowLeft', 'a', 'A'], right: ['ArrowRight', 'd', 'D'], jump: ['ArrowUp', 'w', 'W', ' '] };
 
-  function isDown(action) { return bind[action].some(k => keys[k]) || touch[action]; }
+  function isDown(action) { return bind[action].some(k => keys[k]) || touch[action] || gamepad[action]; }
+
+  // Basic Gamepad API support (left stick / d-pad to move, any face button
+  // to jump) - polled once per frame since the API has no change events.
+  function pollGamepad() {
+    if (!navigator.getGamepads) return;
+    const pads = navigator.getGamepads();
+    const gp = pads && (pads[0] || pads[1] || pads[2] || pads[3]);
+    if (!gp) { gamepad.left = false; gamepad.right = false; gamepad.jump = false; return; }
+    const axisX = gp.axes && gp.axes[0] || 0;
+    const dpadLeft = !!(gp.buttons[14] && gp.buttons[14].pressed);
+    const dpadRight = !!(gp.buttons[15] && gp.buttons[15].pressed);
+    gamepad.left = axisX < -0.35 || dpadLeft;
+    gamepad.right = axisX > 0.35 || dpadRight;
+    gamepad.jump = [0, 1, 2, 3].some((i) => gp.buttons[i] && gp.buttons[i].pressed);
+    if (gamepad.left || gamepad.right || gamepad.jump) handleFirstGesture();
+  }
 
   function handleFirstGesture() {
     Audio.unlock();
@@ -359,10 +397,12 @@
   const btnPause = document.getElementById('btnPause');
   const btnMute = document.getElementById('btnMute');
   const btnMotion = document.getElementById('btnMotion');
+  const btnTitle = document.getElementById('btnTitle');
 
   btnPause.addEventListener('click', () => { handleFirstGesture(); if (state.mode === 'playing' || state.paused) togglePause(); });
   btnMute.addEventListener('click', () => { handleFirstGesture(); toggleMute(); });
   btnMotion.addEventListener('click', () => { handleFirstGesture(); toggleReducedMotion(); });
+  btnTitle.addEventListener('click', () => { window.location.href = 'index.html'; });
   canvas.addEventListener('pointerdown', handleFirstGesture);
 
   function toggleMute() {
@@ -410,7 +450,7 @@
       theme: 'night',
       width: 3400,
       flagX: 3400 - 80,
-      checkpoints: [1150, 2300],
+      checkpoints: [450, 1150, 2300],
       solids: [
         rect(0, GROUND_Y, 900, 40),
         rect(980, GROUND_Y, 820, 40),
@@ -447,7 +487,10 @@
         { x: 500, y: GROUND_Y - 24 }, { x: 1600, y: 290 }, { x: 2500, y: GROUND_Y - 24 }, { x: 3000, y: 310 },
       ],
       enemies: [
-        makeEnemyDef(500, GROUND_Y - 28, 350, 850),
+        // Kept off the opening run (x < 550, where the first checkpoint and
+        // a mushroom sit) so a fresh spawn has room to react before the
+        // first threat, instead of being able to chain-graze right at x=60.
+        makeEnemyDef(700, GROUND_Y - 28, 550, 880),
         makeEnemyDef(1150, 350 - 28, 1130, 1220),
         makeEnemyDef(2000, GROUND_Y - 28, 1900, 2700),
         makeEnemyDef(2900, GROUND_Y - 28, 2860, 3300),
@@ -459,7 +502,7 @@
       theme: 'bloodmoon',
       width: 3800,
       flagX: 3800 - 80,
-      checkpoints: [1300, 2600],
+      checkpoints: [450, 1300, 2600],
       solids: [
         rect(0, GROUND_Y, 700, 40),
         rect(780, GROUND_Y, 600, 40),
@@ -597,9 +640,11 @@
     transitionTimer: 0,
     coinsCollectedTotal: 0,
     coinsTotalAll: LEVELS.reduce((sum, l) => sum + l.coins.length, 0),
+    elapsedTime: 0,
   };
 
   const levelLabel = document.getElementById('levelLabel');
+  const timeLabel = document.getElementById('timeLabel');
 
   let player = makePlayer();
   let current = null; // runtime copy of the active level's mutable entities
@@ -616,6 +661,7 @@
     };
     stars = buildStars(def.width);
     player = makePlayer();
+    player.invuln = RESPAWN_INVULN_TIME; // brief grace period so a fresh spawn can't be grazed instantly
     state.cameraX = 0;
     Particles.clear();
     levelLabel.textContent = 'Level ' + (index + 1) + ': ' + def.name;
@@ -627,11 +673,14 @@
     state.score = 0;
     state.lives = 3;
     state.levelIndex = 0;
+    state.coinsCollectedTotal = 0;
+    state.elapsedTime = 0;
     loadLevel(0);
   }
 
   function startPlaying() {
     state.mode = 'playing';
+    state.elapsedTime = 0;
     loadLevel(0);
     announce('Game started. Level 1: ' + LEVELS[0].name);
   }
@@ -642,6 +691,7 @@
     state.mode = 'gameover';
     Audio.sfx.gameover();
     saveBestScore();
+    Leaderboard.submit(state.score, state.elapsedTime, false);
     announce('Game over. Final score ' + state.score + '.');
   }
 
@@ -824,6 +874,7 @@
         state.mode = 'victory';
         Audio.sfx.victory();
         saveBestScore();
+        Leaderboard.submit(state.score, state.elapsedTime, true);
         announce('You win! Final score ' + state.score + '.');
       }
     }
@@ -870,6 +921,7 @@
       return;
     }
     if (state.mode !== 'playing') return;
+    state.elapsedTime += dt;
     updatePlayer(dt);
     if (state.mode !== 'playing') return;
     updateEnemies(dt);
@@ -928,21 +980,49 @@
     ctx.fillStyle = pal.hill;
     for (let i = -1; i < Math.ceil(current.def.width / 260) + 2; i++) {
       const hx = i * 260 - (parallax % 260);
-      ctx.beginPath();
-      ctx.arc(hx + 100, GROUND_Y + 20, 90, Math.PI, 0);
-      ctx.fill();
-      ctx.strokeStyle = pal.hill;
-      ctx.lineWidth = 3;
-      for (let b = 0; b < 3; b++) {
-        const bx = hx + 40 + b * 30;
-        const by = GROUND_Y - 65;
+      if (current.def.theme === 'bloodmoon') {
+        // Broken ruin silhouettes instead of round hills, so level 2 reads
+        // as a distinct place rather than just a recolored level 1.
         ctx.beginPath();
-        ctx.moveTo(bx, by + 30);
-        ctx.lineTo(bx + 4, by);
-        ctx.lineTo(bx - 8, by - 14);
-        ctx.moveTo(bx + 4, by);
-        ctx.lineTo(bx + 12, by - 12);
-        ctx.stroke();
+        ctx.moveTo(hx, GROUND_Y);
+        ctx.lineTo(hx + 14, GROUND_Y - 40);
+        ctx.lineTo(hx + 34, GROUND_Y - 20);
+        ctx.lineTo(hx + 52, GROUND_Y - 78);
+        ctx.lineTo(hx + 70, GROUND_Y - 30);
+        ctx.lineTo(hx + 96, GROUND_Y - 55);
+        ctx.lineTo(hx + 120, GROUND_Y - 15);
+        ctx.lineTo(hx + 140, GROUND_Y - 60);
+        ctx.lineTo(hx + 160, GROUND_Y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = pal.hill;
+        ctx.lineWidth = 3;
+        for (let b = 0; b < 2; b++) {
+          const bx = hx + 55 + b * 40;
+          ctx.beginPath();
+          ctx.moveTo(bx, GROUND_Y - 78);
+          ctx.lineTo(bx, GROUND_Y - 110);
+          ctx.moveTo(bx - 8, GROUND_Y - 100);
+          ctx.lineTo(bx + 8, GROUND_Y - 92);
+          ctx.stroke();
+        }
+      } else {
+        ctx.beginPath();
+        ctx.arc(hx + 100, GROUND_Y + 20, 90, Math.PI, 0);
+        ctx.fill();
+        ctx.strokeStyle = pal.hill;
+        ctx.lineWidth = 3;
+        for (let b = 0; b < 3; b++) {
+          const bx = hx + 40 + b * 30;
+          const by = GROUND_Y - 65;
+          ctx.beginPath();
+          ctx.moveTo(bx, by + 30);
+          ctx.lineTo(bx + 4, by);
+          ctx.lineTo(bx - 8, by - 14);
+          ctx.moveTo(bx + 4, by);
+          ctx.lineTo(bx + 12, by - 12);
+          ctx.stroke();
+        }
       }
     }
 
@@ -1060,19 +1140,29 @@
         continue;
       }
 
-      const bodyColor = en.type === 'fast' ? '#241018' : '#0c0810';
+      const isFast = en.type === 'fast';
+      const bodyColor = isFast ? '#241018' : '#0c0810';
       ctx.fillStyle = bodyColor;
       ctx.beginPath();
       ctx.ellipse(ex + en.w / 2, en.y + en.h / 2 + 2, en.w / 2, en.h / 2, 0, 0, Math.PI * 2);
       ctx.fill();
+      if (isFast) {
+        // Distinguish the faster variant by silhouette/outline, not color
+        // alone, so it still reads clearly for colorblind players.
+        ctx.strokeStyle = '#ff6a3a';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
 
       ctx.fillStyle = bodyColor;
-      for (let sp = 0; sp < 3; sp++) {
-        const spx = ex + 6 + sp * 9;
+      const spikeCount = isFast ? 5 : 3;
+      const spikeGap = isFast ? 5.5 : 9;
+      for (let sp = 0; sp < spikeCount; sp++) {
+        const spx = ex + 4 + sp * spikeGap;
         ctx.beginPath();
         ctx.moveTo(spx, en.y + 4);
-        ctx.lineTo(spx + 4, en.y - 6);
-        ctx.lineTo(spx + 8, en.y + 4);
+        ctx.lineTo(spx + (isFast ? 3 : 4), en.y - (isFast ? 8 : 6));
+        ctx.lineTo(spx + (isFast ? 6 : 8), en.y + 4);
         ctx.closePath();
         ctx.fill();
       }
@@ -1279,9 +1369,19 @@
 
     ctx.fillStyle = '#fff';
     ctx.font = '18px monospace';
-    ctx.fillText('Final Score: ' + state.score + '   Best: ' + settings.bestScore, VIEW_W / 2, VIEW_H / 2 - 5);
-    ctx.fillText('Coins collected: ' + state.coinsCollectedTotal + ' / ' + state.coinsTotalAll, VIEW_W / 2, VIEW_H / 2 + 22);
-    ctx.fillText('Press ENTER or SPACE to restart', VIEW_W / 2, VIEW_H / 2 + 56);
+    ctx.fillText('Final Score: ' + state.score + '   Best: ' + settings.bestScore, VIEW_W / 2, VIEW_H / 2 - 8);
+    ctx.fillText('Time: ' + formatTime(state.elapsedTime) + '   Coins: ' + state.coinsCollectedTotal + ' / ' + state.coinsTotalAll, VIEW_W / 2, VIEW_H / 2 + 16);
+
+    const top = Leaderboard.load();
+    if (top.length) {
+      ctx.font = '13px monospace';
+      ctx.fillStyle = '#aaa';
+      ctx.fillText('Top scores: ' + top.slice(0, 3).map((e) => e.score + (e.won ? '*' : '')).join('  ·  '), VIEW_W / 2, VIEW_H / 2 + 42);
+    }
+
+    ctx.fillStyle = '#fff';
+    ctx.font = '18px monospace';
+    ctx.fillText('Press ENTER or SPACE to restart', VIEW_W / 2, VIEW_H / 2 + 74);
     ctx.textAlign = 'left';
   }
 
@@ -1298,6 +1398,7 @@
   }
 
   function draw(t) {
+    timeLabel.textContent = formatTime(state.elapsedTime);
     drawBackground(t);
     drawSolids();
     drawMushrooms();
@@ -1325,6 +1426,7 @@
     dt = Math.min(Math.max(dt, 0), 1 / 30); // clamp so tab-switching doesn't cause tunneling
     lastTime = timestamp;
 
+    pollGamepad();
     try {
       if (!state.paused) update(dt);
     } catch (e) {
@@ -1343,7 +1445,7 @@
 
   // Read-only debug hook for automated QA/smoke testing (see tests/smoke.spec.js).
   window.__SPB_DEBUG__ = {
-    getState: () => ({ mode: state.mode, paused: state.paused, score: state.score, lives: state.lives, levelIndex: state.levelIndex }),
+    getState: () => ({ mode: state.mode, paused: state.paused, score: state.score, lives: state.lives, levelIndex: state.levelIndex, elapsedTime: state.elapsedTime }),
     getPlayer: () => ({ x: player.x, y: player.y, vx: player.vx, vy: player.vy, invuln: player.invuln }),
     getLevel: () => ({ checkpointX: current.checkpointX, coinsTaken: current.coins.filter(c => c.taken).length, coinsTotal: current.coins.length, enemiesAlive: current.enemies.filter(e => e.alive).length, enemies: current.enemies.map(e => ({ x: e.x, y: e.y, alive: e.alive, type: e.type })) }),
     getSettings: () => ({ muted: settings.muted, reducedMotion: settings.reducedMotion, bestScore: settings.bestScore }),
@@ -1351,7 +1453,8 @@
     teleport: (x, y) => { player.x = x; player.y = (y !== undefined ? y : GROUND_Y - player.h); player.vx = 0; player.vy = 0; },
     jumpToLevel: (i) => { state.levelIndex = i; loadLevel(i); state.mode = 'playing'; },
     forceGameOver: () => endGame(),
-    forceVictory: () => { state.mode = 'victory'; saveBestScore(); },
+    forceVictory: () => { state.mode = 'victory'; saveBestScore(); Leaderboard.submit(state.score, state.elapsedTime, true); },
+    getLeaderboard: () => Leaderboard.load(),
   };
 })();
 </script>
