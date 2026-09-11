@@ -21,13 +21,14 @@
     flex-direction: column;
     align-items: center;
     gap: 10px;
+    width: 100%;
   }
 
   #title {
     color: #8f2d56;
     text-shadow: 0 0 8px #d63447, 0 0 18px #d63447, 3px 3px 0 #000;
     letter-spacing: 2px;
-    font-size: 22px;
+    font-size: clamp(18px, 2.4vw, 26px);
   }
 
   canvas {
@@ -37,8 +38,9 @@
     box-shadow: 0 0 0 4px #3a1f4d, 0 10px 40px rgba(0,0,0,0.85);
     image-rendering: pixelated;
     image-rendering: crisp-edges;
-    max-width: 95vw;
+    width: min(96vw, calc(88vh * 800 / 480), 1500px);
     height: auto;
+    aspect-ratio: 800 / 480;
   }
 
   #hint {
@@ -440,11 +442,11 @@
   // Drawing
   // ---------------------------------------------------------------------
   function drawBackground(t) {
-    // Night sky gradient
+    // Night sky gradient (brightened for visibility, same moody hues)
     const sky = ctx.createLinearGradient(0, 0, 0, VIEW_H);
-    sky.addColorStop(0, '#05040a');
-    sky.addColorStop(0.55, '#0d0a1f');
-    sky.addColorStop(1, '#1a1230');
+    sky.addColorStop(0, '#100e22');
+    sky.addColorStop(0.55, '#211a3c');
+    sky.addColorStop(1, '#392a52');
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
@@ -467,11 +469,11 @@
     const moonParallax = state.cameraX * 0.08;
     const moonX = VIEW_W * 0.78 - moonParallax % (VIEW_W * 1.4);
     const moonY = 80;
-    const glow = ctx.createRadialGradient(moonX, moonY, 10, moonX, moonY, 90);
-    glow.addColorStop(0, 'rgba(226, 220, 180, 0.35)');
+    const glow = ctx.createRadialGradient(moonX, moonY, 10, moonX, moonY, 140);
+    glow.addColorStop(0, 'rgba(226, 220, 180, 0.55)');
     glow.addColorStop(1, 'rgba(226, 220, 180, 0)');
     ctx.fillStyle = glow;
-    ctx.fillRect(moonX - 90, moonY - 90, 180, 180);
+    ctx.fillRect(moonX - 140, moonY - 140, 280, 280);
     ctx.fillStyle = '#e6dfb8';
     ctx.beginPath();
     ctx.arc(moonX, moonY, 34, 0, Math.PI * 2);
@@ -483,9 +485,9 @@
     ctx.arc(moonX + 12, moonY - 12, 3, 0, Math.PI * 2);
     ctx.fill();
 
-    // Dead black silhouette hills with gnarled tree spikes
+    // Dead silhouette hills with gnarled tree spikes
     const parallax = state.cameraX * 0.3;
-    ctx.fillStyle = '#0a0812';
+    ctx.fillStyle = '#1c1730';
     for (let i = -1; i < 6; i++) {
       const hx = i * 260 - (parallax % 260);
       ctx.beginPath();
@@ -531,10 +533,10 @@
       if (sx + s.w < 0 || sx > VIEW_W) continue;
 
       const isGround = s.y === GROUND_Y;
-      ctx.fillStyle = isGround ? '#2b1f22' : '#3b2740';
+      ctx.fillStyle = isGround ? '#3a2b30' : '#4d3453';
       ctx.fillRect(sx, s.y, s.w, s.h);
       // top highlight strip: dead moss / dried blood tint
-      ctx.fillStyle = isGround ? '#3a3320' : '#5c2a3a';
+      ctx.fillStyle = isGround ? '#4a4028' : '#733a4a';
       ctx.fillRect(sx, s.y, s.w, 8);
       // cracked texture
       ctx.strokeStyle = 'rgba(0,0,0,0.4)';
@@ -797,10 +799,10 @@
   }
 
   function drawVignette(t) {
-    const flicker = 0.7 + Math.sin(t * 2.3) * 0.05 + Math.random() * 0.03;
+    const flicker = 0.4 + Math.sin(t * 2.3) * 0.04 + Math.random() * 0.02;
     const grad = ctx.createRadialGradient(
-      VIEW_W / 2, VIEW_H / 2, VIEW_H * 0.22,
-      VIEW_W / 2, VIEW_H / 2, VIEW_H * 0.75
+      VIEW_W / 2, VIEW_H / 2, VIEW_H * 0.34,
+      VIEW_W / 2, VIEW_H / 2, VIEW_H * 0.9
     );
     grad.addColorStop(0, 'rgba(0,0,0,0)');
     grad.addColorStop(1, `rgba(0,0,0,${flicker})`);
