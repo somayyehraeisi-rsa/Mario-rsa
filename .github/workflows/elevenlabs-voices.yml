@@ -47,7 +47,7 @@ jobs:
 
       - name: Design and save voices via ElevenLabs
         env:
-          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          ELEVENLABS_API_KEY: ${{ secrets.LABS }}
           VOICE1_NAME: ${{ inputs.voice1_name }}
           VOICE1_DESCRIPTION: ${{ inputs.voice1_description }}
           VOICE1_TEXT: ${{ inputs.voice1_text }}
