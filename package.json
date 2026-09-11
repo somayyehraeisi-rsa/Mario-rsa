@@ -1,0 +1,12 @@
+{
+  "name": "super-plumber-bros",
+  "private": true,
+  "version": "1.0.0",
+  "description": "A Dark Descent - a small self-contained HTML5 canvas platformer. No build step; index.html and mario.html are deployed as-is.",
+  "scripts": {
+    "test": "node tests/smoke.test.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.1"
+  }
+}

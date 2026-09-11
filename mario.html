@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Super Plumber Bros - Retro Platformer</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -20,7 +21,9 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
+    width: 100%;
+    padding: 8px;
   }
 
   #title {
@@ -29,6 +32,36 @@
     letter-spacing: 2px;
     font-size: 22px;
   }
+
+  #topBar {
+    width: 100%;
+    max-width: min(800px, 95vw);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: #aaa;
+    font-size: 12px;
+  }
+
+  #topBar .buttons {
+    display: flex;
+    gap: 8px;
+  }
+
+  .iconBtn {
+    width: 34px;
+    height: 34px;
+    border-radius: 6px;
+    border: 2px solid #5c1030;
+    background: rgba(10, 8, 16, 0.75);
+    color: #e7e1ea;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  .iconBtn:hover { filter: brightness(1.3); }
+  .iconBtn:focus-visible { outline: 3px solid #b98cff; outline-offset: 2px; }
 
   canvas {
     background: #05050f;
@@ -39,11 +72,48 @@
     image-rendering: crisp-edges;
     max-width: 95vw;
     height: auto;
+    touch-action: none;
   }
 
   #hint {
     color: #aaa;
     font-size: 12px;
+    text-align: center;
+  }
+
+  #touchControls {
+    display: none;
+    width: 100%;
+    max-width: min(800px, 95vw);
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 4px;
+  }
+  body.touch-device #touchControls { display: flex; }
+
+  #touchControls .side { display: flex; gap: 12px; }
+
+  .touchBtn {
+    width: 58px;
+    height: 58px;
+    border-radius: 50%;
+    border: 2px solid rgba(185, 140, 255, 0.55);
+    background: rgba(20, 15, 30, 0.6);
+    color: #fff;
+    font-size: 22px;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .touchBtn:active { background: rgba(140, 45, 86, 0.7); }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 </style>
 </head>
@@ -51,8 +121,26 @@
 
 <div id="gameWrap">
   <div id="title">SUPER PLUMBER BROS</div>
-  <canvas id="game" width="800" height="480"></canvas>
-  <div id="hint">Move: ← → / A D &nbsp;|&nbsp; Jump: Space / ↑ / W &nbsp;|&nbsp; Stomp Goombas from above!</div>
+  <div id="topBar">
+    <span id="levelLabel">Level 1</span>
+    <span class="buttons">
+      <button id="btnPause" class="iconBtn" type="button" aria-label="Pause game">&#10074;&#10074;</button>
+      <button id="btnMute" class="iconBtn" type="button" aria-label="Mute sound">&#128266;</button>
+      <button id="btnMotion" class="iconBtn" type="button" aria-label="Toggle reduced motion">&#10024;</button>
+    </span>
+  </div>
+  <canvas id="game" width="800" height="480" role="img" aria-label="Platformer game canvas. Use the on-screen HUD readout below for score, lives and progress."></canvas>
+  <div id="touchControls">
+    <span class="side">
+      <button class="touchBtn" id="touchLeft" aria-label="Move left">&#9664;</button>
+      <button class="touchBtn" id="touchRight" aria-label="Move right">&#9654;</button>
+    </span>
+    <span class="side">
+      <button class="touchBtn" id="touchJump" aria-label="Jump">&#8593;</button>
+    </span>
+  </div>
+  <div id="hint">Move: &larr; &rarr; / A D &nbsp;|&nbsp; Jump: Space / &uarr; / W &nbsp;|&nbsp; Pause: P &nbsp;|&nbsp; Mute: M &nbsp;|&nbsp; Stomp enemies from above!</div>
+  <div id="srLive" class="visually-hidden" role="status" aria-live="polite"></div>
 </div>
 
 <script>
@@ -67,6 +155,9 @@
   const VIEW_W = canvas.width;
   const VIEW_H = canvas.height;
 
+  const isTouchDevice = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+  if (isTouchDevice) document.body.classList.add('touch-device');
+
   // ---------------------------------------------------------------------
   // Tunable physics / gameplay constants
   // ---------------------------------------------------------------------
@@ -76,110 +167,390 @@
   const MAX_SPEED = 260;         // px/s horizontal cap
   const FRICTION = 2200;         // px/s^2 deceleration with no input, on ground
   const JUMP_VELOCITY = -700;    // initial upward velocity
+  const JUMP_CUT_MULTIPLIER = 0.45; // shortens the jump if Jump is released early
   const MAX_FALL_SPEED = 900;
-  const ENEMY_SPEED = 80;
-  const INVULN_TIME = 1.5;       // seconds of flashing invulnerability after a hit
+  const COYOTE_TIME = 0.09;      // grace window to jump just after leaving a ledge
+  const JUMP_BUFFER_TIME = 0.12; // grace window for a jump press just before landing
+  const STEP_MAX = 10;           // sub-step size for swept AABB collision (anti-tunneling)
 
-  const LEVEL_WIDTH = 3400;
-  const GROUND_Y = 440;          // top surface of ground tiles
-  const KILL_Y = 620;            // fall past this = death (pit)
+  const ENEMY_SPEED = 80;
+  const FAST_ENEMY_SPEED = 100;
+  const WRAITH_SPEED = 70;
+  const WRAITH_AMPLITUDE = 40;
+  const WRAITH_FREQ = 2.0;
+
+  const INVULN_TIME = 1.5;        // seconds of flashing invulnerability after a graze hit
+  const RESPAWN_INVULN_TIME = 1.0;
+  const MAX_LIVES = 5;
+
+  const GROUND_Y = 440;           // top surface of ground tiles
+  const KILL_Y = 620;             // fall past this = death (pit)
+
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+  function rect(x, y, w, h) { return { x, y, w, h }; }
 
   // ---------------------------------------------------------------------
-  // Input handling
+  // Persistent settings (localStorage) - muted / reduced motion / best score
+  // ---------------------------------------------------------------------
+  const Storage = {
+    get(key, fallback) {
+      try {
+        const v = window.localStorage.getItem(key);
+        return v === null ? fallback : JSON.parse(v);
+      } catch (e) { return fallback; }
+    },
+    set(key, value) {
+      try { window.localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* storage unavailable (private mode etc.) */ }
+    }
+  };
+
+  const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const settings = {
+    muted: Storage.get('spb_muted', false),
+    reducedMotion: Storage.get('spb_reducedMotion', prefersReducedMotion),
+    bestScore: Storage.get('spb_bestScore', 0),
+  };
+
+  function saveBestScore() {
+    if (state.score > settings.bestScore) {
+      settings.bestScore = state.score;
+      Storage.set('spb_bestScore', settings.bestScore);
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Accessibility: a visually-hidden live region for screen readers
+  // ---------------------------------------------------------------------
+  const srLive = document.getElementById('srLive');
+  let srTimer = 0;
+  function announce(text) { srLive.textContent = text; }
+
+  // ---------------------------------------------------------------------
+  // Audio: small procedural sound engine (no external asset files needed)
+  // ---------------------------------------------------------------------
+  const Audio = (function () {
+    let ctxAudio = null;
+    let master = null;
+    let droneNodes = null;
+    let unlocked = false;
+
+    function ensureContext() {
+      if (ctxAudio) return;
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      ctxAudio = new AC();
+      master = ctxAudio.createGain();
+      master.gain.value = settings.muted ? 0 : 0.5;
+      master.connect(ctxAudio.destination);
+    }
+
+    // Browsers require a user gesture before audio can play.
+    function unlock() {
+      ensureContext();
+      if (!ctxAudio) return;
+      if (ctxAudio.state === 'suspended') ctxAudio.resume();
+      if (!unlocked) {
+        unlocked = true;
+        startDrone();
+      }
+    }
+
+    function tone({ freq = 440, duration = 0.15, type = 'square', gain = 0.2, sweepTo = null, delay = 0 }) {
+      if (!ctxAudio || settings.muted) return;
+      const t0 = ctxAudio.currentTime + delay;
+      const osc = ctxAudio.createOscillator();
+      const g = ctxAudio.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, t0);
+      if (sweepTo !== null) osc.frequency.exponentialRampToValueAtTime(Math.max(1, sweepTo), t0 + duration);
+      g.gain.setValueAtTime(gain, t0);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
+      osc.connect(g);
+      g.connect(master);
+      osc.start(t0);
+      osc.stop(t0 + duration + 0.02);
+    }
+
+    function startDrone() {
+      if (!ctxAudio || droneNodes) return;
+      const g = ctxAudio.createGain();
+      g.gain.value = 0.05;
+      const o1 = ctxAudio.createOscillator();
+      const o2 = ctxAudio.createOscillator();
+      o1.type = 'sine'; o1.frequency.value = 55;
+      o2.type = 'sine'; o2.frequency.value = 55.6; // slow beating for an eerie drone
+      const lfo = ctxAudio.createOscillator();
+      const lfoGain = ctxAudio.createGain();
+      lfo.frequency.value = 0.08;
+      lfoGain.gain.value = 0.02;
+      lfo.connect(lfoGain);
+      lfoGain.connect(g.gain);
+      o1.connect(g); o2.connect(g);
+      g.connect(master);
+      o1.start(); o2.start(); lfo.start();
+      droneNodes = { g, o1, o2, lfo };
+    }
+
+    const sfx = {
+      jump: () => tone({ freq: 320, sweepTo: 620, duration: 0.12, type: 'square', gain: 0.16 }),
+      coin: () => { tone({ freq: 880, duration: 0.08, type: 'triangle', gain: 0.18 }); tone({ freq: 1320, duration: 0.12, type: 'triangle', gain: 0.14, delay: 0.05 }); },
+      stomp: () => tone({ freq: 180, sweepTo: 60, duration: 0.14, type: 'sawtooth', gain: 0.22 }),
+      hurt: () => tone({ freq: 220, sweepTo: 80, duration: 0.3, type: 'sawtooth', gain: 0.22 }),
+      powerup: () => { [660, 880, 1100, 1320].forEach((f, i) => tone({ freq: f, duration: 0.12, type: 'triangle', gain: 0.16, delay: i * 0.07 })); },
+      checkpoint: () => { tone({ freq: 700, duration: 0.15, type: 'sine', gain: 0.15 }); tone({ freq: 1050, duration: 0.2, type: 'sine', gain: 0.12, delay: 0.08 }); },
+      levelclear: () => { [520, 660, 780, 1040].forEach((f, i) => tone({ freq: f, duration: 0.16, type: 'square', gain: 0.16, delay: i * 0.1 })); },
+      victory: () => { [520, 660, 780, 1040, 1300].forEach((f, i) => tone({ freq: f, duration: 0.22, type: 'square', gain: 0.18, delay: i * 0.13 })); },
+      gameover: () => { [300, 260, 200, 140].forEach((f, i) => tone({ freq: f, duration: 0.28, type: 'sawtooth', gain: 0.18, delay: i * 0.16 })); },
+    };
+
+    function setMuted(m) {
+      settings.muted = m;
+      Storage.set('spb_muted', m);
+      if (master) master.gain.value = m ? 0 : 0.5;
+    }
+
+    function setPaused(paused) {
+      if (!ctxAudio) return;
+      if (paused) ctxAudio.suspend(); else ctxAudio.resume();
+    }
+
+    return { unlock, sfx, setMuted, setPaused };
+  })();
+
+  // ---------------------------------------------------------------------
+  // Input handling (keyboard + on-screen touch controls)
   // ---------------------------------------------------------------------
   const keys = {};
+  const touch = { left: false, right: false, jump: false };
   const bind = { left: ['ArrowLeft', 'a', 'A'], right: ['ArrowRight', 'd', 'D'], jump: ['ArrowUp', 'w', 'W', ' '] };
+
+  function isDown(action) { return bind[action].some(k => keys[k]) || touch[action]; }
+
+  function handleFirstGesture() {
+    Audio.unlock();
+    if (state.mode === 'intro') startPlaying();
+  }
 
   window.addEventListener('keydown', (e) => {
     keys[e.key] = true;
     if (bind.jump.includes(e.key)) e.preventDefault();
-    if (state.mode !== 'playing' && (e.key === 'Enter' || e.key === ' ')) resetGame();
+    handleFirstGesture();
+
+    if (e.key === 'm' || e.key === 'M') toggleMute();
+    if (e.key === 'r' || e.key === 'R') toggleReducedMotion();
+    if ((e.key === 'p' || e.key === 'P' || e.key === 'Escape') && (state.mode === 'playing' || state.paused)) togglePause();
+    if (state.mode !== 'playing' && state.mode !== 'intro' && state.mode !== 'levelclear' && (e.key === 'Enter' || e.key === ' ')) resetGame();
   });
   window.addEventListener('keyup', (e) => { keys[e.key] = false; });
 
-  function isDown(action) { return bind[action].some(k => keys[k]); }
-
-  // ---------------------------------------------------------------------
-  // Level geometry: solid platforms/ground as AABB rectangles
-  // ---------------------------------------------------------------------
-  function rect(x, y, w, h) { return { x, y, w, h }; }
-
-  const solids = [
-    // Ground segments, broken up by two pits for a bit of risk/reward
-    rect(0, GROUND_Y, 900, 40),
-    rect(980, GROUND_Y, 820, 40),
-    rect(1860, GROUND_Y, 900, 40),
-    rect(2820, GROUND_Y, LEVEL_WIDTH - 2820, 40),
-
-    // Floating platforms
-    rect(300, 330, 120, 24),
-    rect(520, 260, 100, 24),
-    rect(760, 340, 140, 24),
-    rect(1120, 350, 110, 24),
-    rect(1300, 260, 90, 24),
-    rect(1550, 320, 130, 24),
-    rect(2000, 340, 120, 24),
-    rect(2200, 260, 100, 24),
-    rect(2420, 350, 140, 24),
-    rect(2680, 300, 100, 24),
-    rect(2980, 340, 140, 24),
-    rect(3150, 250, 120, 24),
-  ];
-
-  const coins = [
-    { x: 340, y: 290, taken: false },
-    { x: 560, y: 220, taken: false },
-    { x: 800, y: 300, taken: false },
-    { x: 840, y: 300, taken: false },
-    { x: 1150, y: 310, taken: false },
-    { x: 1330, y: 220, taken: false },
-    { x: 1590, y: 280, taken: false },
-    { x: 1630, y: 280, taken: false },
-    { x: 2030, y: 300, taken: false },
-    { x: 2230, y: 220, taken: false },
-    { x: 2450, y: 310, taken: false },
-    { x: 2710, y: 260, taken: false },
-    { x: 3010, y: 300, taken: false },
-    { x: 3180, y: 210, taken: false },
-  ];
-
-  const mushrooms = [
-    { x: 500, y: GROUND_Y - 24, taken: false },
-    { x: 1600, y: 290, taken: false },
-    { x: 2450, y: GROUND_Y - 24 - 300 + 300, taken: false }, // sits on ground segment
-    { x: 3000, y: 310, taken: false },
-  ];
-  // fix mushroom that should sit on ground segment 3 (x 1860-2760)
-  mushrooms[2] = { x: 2500, y: GROUND_Y - 24, taken: false };
-
-  function makeEnemy(x, y, patrolMin, patrolMax) {
-    return {
-      x, y, w: 30, h: 28,
-      vx: -ENEMY_SPEED, vy: 0,
-      alive: true,
-      patrolMin, patrolMax,
-      squashT: 0, // squash-death animation timer
-    };
+  function bindHold(el, prop) {
+    const on = (e) => { e.preventDefault(); touch[prop] = true; handleFirstGesture(); };
+    const off = (e) => { e.preventDefault(); touch[prop] = false; };
+    el.addEventListener('pointerdown', on);
+    el.addEventListener('pointerup', off);
+    el.addEventListener('pointerleave', off);
+    el.addEventListener('pointercancel', off);
   }
+  bindHold(document.getElementById('touchLeft'), 'left');
+  bindHold(document.getElementById('touchRight'), 'right');
+  bindHold(document.getElementById('touchJump'), 'jump');
 
-  const enemiesInit = () => ([
-    makeEnemy(500, GROUND_Y - 28, 350, 850),
-    makeEnemy(1150, 350 - 28, 1130, 1220), // on a platform
-    makeEnemy(2000, GROUND_Y - 28, 1900, 2700),
-    makeEnemy(2900, GROUND_Y - 28, 2860, 3300),
-  ]);
+  const btnPause = document.getElementById('btnPause');
+  const btnMute = document.getElementById('btnMute');
+  const btnMotion = document.getElementById('btnMotion');
 
-  const FLAG_X = LEVEL_WIDTH - 80;
+  btnPause.addEventListener('click', () => { handleFirstGesture(); if (state.mode === 'playing' || state.paused) togglePause(); });
+  btnMute.addEventListener('click', () => { handleFirstGesture(); toggleMute(); });
+  btnMotion.addEventListener('click', () => { handleFirstGesture(); toggleReducedMotion(); });
+  canvas.addEventListener('pointerdown', handleFirstGesture);
+
+  function toggleMute() {
+    Audio.setMuted(!settings.muted);
+    btnMute.textContent = settings.muted ? '\u{1F507}' : '\u{1F50A}';
+    btnMute.setAttribute('aria-label', settings.muted ? 'Unmute sound' : 'Mute sound');
+    announce(settings.muted ? 'Sound muted' : 'Sound on');
+  }
+  function toggleReducedMotion() {
+    settings.reducedMotion = !settings.reducedMotion;
+    Storage.set('spb_reducedMotion', settings.reducedMotion);
+    announce(settings.reducedMotion ? 'Reduced motion on' : 'Reduced motion off');
+  }
+  function togglePause() {
+    state.paused = !state.paused;
+    Audio.setPaused(state.paused);
+    btnPause.textContent = state.paused ? '▶' : '❙❙';
+    btnPause.setAttribute('aria-label', state.paused ? 'Resume game' : 'Pause game');
+    announce(state.paused ? 'Paused' : 'Resumed');
+  }
+  if (settings.muted) { btnMute.textContent = '\u{1F507}'; }
+
+  // ---------------------------------------------------------------------
+  // Level data - a small data-driven set of levels so adding more is just
+  // adding another entry here, instead of hand-editing game logic.
+  // ---------------------------------------------------------------------
+  const THEMES = {
+    night: {
+      skyTop: '#05040a', skyMid: '#0d0a1f', skyBottom: '#1a1230',
+      moonGlow: 'rgba(226, 220, 180, 0.35)', moonColor: '#e6dfb8', moonCrater: 'rgba(150,140,110,0.4)',
+      hill: '#0a0812', fog: 'rgba(200,210,220,0.10)',
+    },
+    bloodmoon: {
+      skyTop: '#170406', skyMid: '#2b0a10', skyBottom: '#3d1013',
+      moonGlow: 'rgba(255, 100, 70, 0.45)', moonColor: '#ff8a63', moonCrater: 'rgba(120,20,10,0.5)',
+      hill: '#150607', fog: 'rgba(255,120,90,0.08)',
+    },
+  };
+
+  function makeEnemyDef(x, y, patrolMin, patrolMax, type) { return { x, y, patrolMin, patrolMax, type: type || 'stalker' }; }
+
+  const LEVELS = [
+    {
+      name: 'The Dark Descent',
+      theme: 'night',
+      width: 3400,
+      flagX: 3400 - 80,
+      checkpoints: [1150, 2300],
+      solids: [
+        rect(0, GROUND_Y, 900, 40),
+        rect(980, GROUND_Y, 820, 40),
+        rect(1860, GROUND_Y, 900, 40),
+        rect(2820, GROUND_Y, 3400 - 2820, 40),
+
+        rect(300, 330, 120, 24),
+        rect(520, 260, 100, 24),
+        rect(760, 340, 140, 24),
+        rect(1120, 350, 110, 24),
+        rect(1300, 260, 90, 24),
+        rect(1550, 320, 130, 24),
+        rect(2000, 340, 120, 24),
+        rect(2200, 260, 100, 24),
+        rect(2420, 350, 140, 24),
+        rect(2680, 300, 100, 24),
+        rect(2980, 340, 140, 24),
+        rect(3150, 250, 120, 24),
+
+        // Hidden bonus alcove above the mid-level platforms.
+        rect(2340, 200, 80, 20),
+        rect(2440, 155, 80, 20),
+        rect(2540, 115, 90, 20),
+      ],
+      coins: [
+        { x: 340, y: 290 }, { x: 560, y: 220 }, { x: 800, y: 300 }, { x: 840, y: 300 },
+        { x: 1150, y: 310 }, { x: 1330, y: 220 }, { x: 1590, y: 280 }, { x: 1630, y: 280 },
+        { x: 2030, y: 300 }, { x: 2230, y: 220 }, { x: 2450, y: 310 }, { x: 2710, y: 260 },
+        { x: 3010, y: 300 }, { x: 3180, y: 210 },
+        // Bonus coins tucked in the hidden alcove.
+        { x: 2560, y: 90 }, { x: 2585, y: 85 }, { x: 2610, y: 90 },
+      ],
+      mushrooms: [
+        { x: 500, y: GROUND_Y - 24 }, { x: 1600, y: 290 }, { x: 2500, y: GROUND_Y - 24 }, { x: 3000, y: 310 },
+      ],
+      enemies: [
+        makeEnemyDef(500, GROUND_Y - 28, 350, 850),
+        makeEnemyDef(1150, 350 - 28, 1130, 1220),
+        makeEnemyDef(2000, GROUND_Y - 28, 1900, 2700),
+        makeEnemyDef(2900, GROUND_Y - 28, 2860, 3300),
+        makeEnemyDef(3200, 180, 3150, 3350, 'wraith'),
+      ],
+    },
+    {
+      name: 'Blood Moon Ruins',
+      theme: 'bloodmoon',
+      width: 3800,
+      flagX: 3800 - 80,
+      checkpoints: [1300, 2600],
+      solids: [
+        rect(0, GROUND_Y, 700, 40),
+        rect(780, GROUND_Y, 600, 40),
+        rect(1480, GROUND_Y, 700, 40),
+        rect(2280, GROUND_Y, 600, 40),
+        rect(2980, GROUND_Y, 3800 - 2980, 40),
+
+        rect(250, 340, 110, 24),
+        rect(430, 270, 90, 24),
+        rect(600, 350, 120, 24),
+        rect(900, 300, 100, 24),
+        rect(1080, 230, 90, 24),
+        rect(1280, 320, 110, 24),
+        rect(1600, 340, 120, 24),
+        rect(1780, 250, 100, 24),
+        rect(1980, 330, 130, 24),
+        rect(2380, 300, 100, 24),
+        rect(2560, 220, 90, 24),
+        rect(2740, 340, 120, 24),
+        rect(3080, 300, 110, 24),
+        rect(3260, 230, 100, 24),
+        rect(3480, 340, 140, 24),
+      ],
+      coins: [
+        { x: 280, y: 300 }, { x: 460, y: 230 }, { x: 640, y: 310 }, { x: 930, y: 260 },
+        { x: 1110, y: 190 }, { x: 1310, y: 280 }, { x: 1630, y: 300 }, { x: 1810, y: 210 },
+        { x: 2010, y: 290 }, { x: 2050, y: 290 }, { x: 2410, y: 260 }, { x: 2590, y: 180 },
+        { x: 2770, y: 300 }, { x: 3110, y: 260 }, { x: 3290, y: 190 }, { x: 3510, y: 300 },
+      ],
+      mushrooms: [
+        { x: 700, y: GROUND_Y - 24 }, { x: 1900, y: GROUND_Y - 24 }, { x: 3200, y: 260 },
+      ],
+      enemies: [
+        makeEnemyDef(500, GROUND_Y - 28, 350, 650, 'fast'),
+        makeEnemyDef(1600, 260, 1500, 2000, 'wraith'),
+        makeEnemyDef(2100, GROUND_Y - 28, 2050, 2450, 'fast'),
+        makeEnemyDef(2900, 230, 2800, 3300, 'wraith'),
+        makeEnemyDef(3400, GROUND_Y - 28, 3350, 3650, 'fast'),
+      ],
+    },
+  ];
 
   // ---------------------------------------------------------------------
   // Night sky decoration (fixed field, twinkles over time)
   // ---------------------------------------------------------------------
-  const STARS = Array.from({ length: 90 }, (_, i) => ({
-    x: (i * 137) % (LEVEL_WIDTH + VIEW_W),
-    y: (i * 53) % (GROUND_Y - 60) + 10,
-    r: 1 + (i % 3) * 0.6,
-    phase: i * 0.6,
-  }));
+  function buildStars(levelWidth) {
+    return Array.from({ length: 90 }, (_, i) => ({
+      x: (i * 137) % (levelWidth + VIEW_W),
+      y: (i * 53) % (GROUND_Y - 60) + 10,
+      r: 1 + (i % 3) * 0.6,
+      phase: i * 0.6,
+    }));
+  }
+
+  // ---------------------------------------------------------------------
+  // Particles (small juice effects; skipped/reduced under reduced-motion)
+  // ---------------------------------------------------------------------
+  const Particles = (function () {
+    let list = [];
+    function burst(x, y, color, count) {
+      if (settings.reducedMotion) count = Math.min(count, 3);
+      for (let i = 0; i < count; i++) {
+        const a = Math.random() * Math.PI * 2;
+        const speed = 40 + Math.random() * 90;
+        list.push({ x, y, vx: Math.cos(a) * speed, vy: Math.sin(a) * speed - 40, life: 0.5 + Math.random() * 0.3, maxLife: 0.8, color, size: 2 + Math.random() * 2 });
+      }
+    }
+    function update(dt) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        const p = list[i];
+        p.vy += 500 * dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.life -= dt;
+        if (p.life <= 0) list.splice(i, 1);
+      }
+    }
+    function draw(cameraX) {
+      for (const p of list) {
+        const alpha = clamp(p.life / p.maxLife, 0, 1);
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x - cameraX, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+    function clear() { list = []; }
+    return { burst, update, draw, clear };
+  })();
 
   // ---------------------------------------------------------------------
   // Player
@@ -192,6 +563,24 @@
       onGround: false,
       facing: 1,
       invuln: 0,
+      coyoteTimer: 0,
+      jumpBuffer: 0,
+      prevJumpDown: false,
+      jumping: false,
+    };
+  }
+
+  function makeEnemy(def) {
+    const speed = def.type === 'fast' ? FAST_ENEMY_SPEED : (def.type === 'wraith' ? WRAITH_SPEED : ENEMY_SPEED);
+    return {
+      x: def.x, y: def.y, w: 30, h: 28,
+      vx: -speed, vy: 0,
+      alive: true,
+      patrolMin: def.patrolMin, patrolMax: def.patrolMax,
+      squashT: 0,
+      type: def.type,
+      baseY: def.y,
+      t: Math.random() * 10,
     };
   }
 
@@ -199,33 +588,61 @@
   // Game state
   // ---------------------------------------------------------------------
   const state = {
-    mode: 'playing', // 'playing' | 'gameover' | 'victory'
+    mode: 'intro', // 'intro' | 'playing' | 'gameover' | 'victory' | 'levelclear'
+    paused: false,
     score: 0,
     lives: 3,
     cameraX: 0,
+    levelIndex: 0,
+    transitionTimer: 0,
+    coinsCollectedTotal: 0,
+    coinsTotalAll: LEVELS.reduce((sum, l) => sum + l.coins.length, 0),
   };
 
-  let player = makePlayer();
-  let enemies = enemiesInit();
+  const levelLabel = document.getElementById('levelLabel');
 
-  function resetGame() {
+  let player = makePlayer();
+  let current = null; // runtime copy of the active level's mutable entities
+  let stars = [];
+
+  function loadLevel(index) {
+    const def = LEVELS[index];
+    current = {
+      def,
+      coins: def.coins.map(c => ({ x: c.x, y: c.y, taken: false })),
+      mushrooms: def.mushrooms.map(m => ({ x: m.x, y: m.y, taken: false })),
+      enemies: def.enemies.map(makeEnemy),
+      checkpointX: 60,
+    };
+    stars = buildStars(def.width);
     player = makePlayer();
-    enemies = enemiesInit();
-    coins.forEach(c => c.taken = false);
-    mushrooms.forEach(m => m.taken = false);
-    state.mode = 'playing';
-    state.score = 0;
-    state.lives = 3;
     state.cameraX = 0;
+    Particles.clear();
+    levelLabel.textContent = 'Level ' + (index + 1) + ': ' + def.name;
   }
 
-  function respawnAfterDeath() {
-    state.lives--;
-    if (state.lives <= 0) {
-      state.mode = 'gameover';
-      return;
-    }
-    player = makePlayer();
+  function resetGame() {
+    state.mode = 'playing';
+    state.paused = false;
+    state.score = 0;
+    state.lives = 3;
+    state.levelIndex = 0;
+    loadLevel(0);
+  }
+
+  function startPlaying() {
+    state.mode = 'playing';
+    loadLevel(0);
+    announce('Game started. Level 1: ' + LEVELS[0].name);
+  }
+
+  loadLevel(0); // populate initial render target while the intro screen is up
+
+  function endGame() {
+    state.mode = 'gameover';
+    Audio.sfx.gameover();
+    saveBestScore();
+    announce('Game over. Final score ' + state.score + '.');
   }
 
   // ---------------------------------------------------------------------
@@ -236,30 +653,47 @@
            a.y < b.y + b.h && a.y + a.h > b.y;
   }
 
-  // Resolve an entity's movement against solids, axis-separated to keep
-  // things simple and avoid tunneling corner cases.
+  // Resolve an entity's movement against solids. Large moves are split into
+  // sub-steps no bigger than STEP_MAX so a fast fall can't tunnel through a
+  // thin platform in a single frame.
   function moveAndCollide(ent, dx, dy) {
-    // Horizontal pass
-    ent.x += dx;
-    for (const s of solids) {
-      if (!aabbOverlap(ent, s)) continue;
-      if (dx > 0) ent.x = s.x - ent.w;
-      else if (dx < 0) ent.x = s.x + s.w;
-    }
-
-    // Vertical pass
-    ent.y += dy;
+    const solids = current.def.solids;
+    const steps = Math.max(1, Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) / STEP_MAX));
+    const sx = dx / steps;
+    const sy = dy / steps;
     ent.onGroundThisFrame = false;
-    for (const s of solids) {
-      if (!aabbOverlap(ent, s)) continue;
-      if (dy > 0) { ent.y = s.y - ent.h; ent.onGroundThisFrame = true; ent.vy = 0; }
-      else if (dy < 0) { ent.y = s.y + s.h; ent.vy = 0; }
+
+    for (let i = 0; i < steps; i++) {
+      ent.x += sx;
+      for (const s of solids) {
+        if (!aabbOverlap(ent, s)) continue;
+        if (sx > 0) ent.x = s.x - ent.w;
+        else if (sx < 0) ent.x = s.x + s.w;
+      }
+
+      ent.y += sy;
+      for (const s of solids) {
+        if (!aabbOverlap(ent, s)) continue;
+        if (sy > 0) { ent.y = s.y - ent.h; ent.onGroundThisFrame = true; ent.vy = 0; }
+        else if (sy < 0) { ent.y = s.y + s.h; ent.vy = 0; }
+      }
     }
   }
 
   // ---------------------------------------------------------------------
   // Update
   // ---------------------------------------------------------------------
+  function updateCheckpoints() {
+    for (const cp of current.def.checkpoints) {
+      if (player.x >= cp && current.checkpointX < cp) {
+        current.checkpointX = cp;
+        Audio.sfx.checkpoint();
+        Particles.burst(player.x - state.cameraX, player.y, '#7fffd4', 10);
+        announce('Checkpoint reached.');
+      }
+    }
+  }
+
   function updatePlayer(dt) {
     const p = player;
 
@@ -268,16 +702,32 @@
     if (isDown('left')) { p.vx -= accel * dt; p.facing = -1; }
     else if (isDown('right')) { p.vx += accel * dt; p.facing = 1; }
     else if (p.onGround) {
-      // Friction brings the player to a stop when no key is held
       if (p.vx > 0) p.vx = Math.max(0, p.vx - FRICTION * dt);
       else if (p.vx < 0) p.vx = Math.min(0, p.vx + FRICTION * dt);
     }
-    p.vx = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, p.vx));
+    p.vx = clamp(p.vx, -MAX_SPEED, MAX_SPEED);
 
-    // --- Jump ---
-    if (isDown('jump') && p.onGround) {
+    // --- Jump: coyote time + input buffering + variable height ---
+    if (p.onGround) p.coyoteTimer = COYOTE_TIME;
+    else p.coyoteTimer = Math.max(0, p.coyoteTimer - dt);
+
+    const jumpDown = isDown('jump');
+    if (jumpDown && !p.prevJumpDown) p.jumpBuffer = JUMP_BUFFER_TIME;
+    else p.jumpBuffer = Math.max(0, p.jumpBuffer - dt);
+    p.prevJumpDown = jumpDown;
+
+    if (p.jumpBuffer > 0 && p.coyoteTimer > 0) {
       p.vy = JUMP_VELOCITY;
       p.onGround = false;
+      p.coyoteTimer = 0;
+      p.jumpBuffer = 0;
+      p.jumping = true;
+      Audio.sfx.jump();
+      Particles.burst(p.x + p.w / 2 - state.cameraX, p.y + p.h, 'rgba(220,220,220,0.6)', 4);
+    }
+    if (!jumpDown && p.vy < 0 && p.jumping) {
+      p.vy *= JUMP_CUT_MULTIPLIER;
+      p.jumping = false;
     }
 
     // --- Gravity ---
@@ -286,35 +736,57 @@
 
     moveAndCollide(p, p.vx * dt, p.vy * dt);
     p.onGround = p.onGroundThisFrame;
+    if (p.onGround) p.jumping = false;
 
     // Level bounds
     if (p.x < 0) p.x = 0;
-    if (p.x + p.w > LEVEL_WIDTH) p.x = LEVEL_WIDTH - p.w;
+    if (p.x + p.w > current.def.width) p.x = current.def.width - p.w;
 
-    // Pit death
+    updateCheckpoints();
+
+    // Pit death: respawn at the last checkpoint reached (not always level start).
     if (p.y > KILL_Y) {
-      respawnAfterDeath();
+      state.lives--;
+      Audio.sfx.hurt();
+      announce(state.lives > 0 ? ('Fell! ' + state.lives + ' lives left.') : 'Fell! Game over.');
+      if (state.lives <= 0) { endGame(); return; }
+      player.x = current.checkpointX;
+      player.y = GROUND_Y - player.h;
+      player.vx = 0; player.vy = 0;
+      player.invuln = RESPAWN_INVULN_TIME;
       return;
     }
 
     if (p.invuln > 0) p.invuln -= dt;
 
     // --- Coins ---
-    for (const c of coins) {
+    for (const c of current.coins) {
       if (c.taken) continue;
       const cBox = { x: c.x - 10, y: c.y - 10, w: 20, h: 20 };
-      if (aabbOverlap(p, cBox)) { c.taken = true; state.score += 100; }
+      if (aabbOverlap(p, cBox)) {
+        c.taken = true;
+        state.score += 100;
+        state.coinsCollectedTotal++;
+        Audio.sfx.coin();
+        Particles.burst(c.x - state.cameraX, c.y, '#aaffe6', 8);
+      }
     }
 
-    // --- Mushrooms ---
-    for (const m of mushrooms) {
+    // --- Mushrooms: score bonus + an extra life (capped) ---
+    for (const m of current.mushrooms) {
       if (m.taken) continue;
       const mBox = { x: m.x - 12, y: m.y - 12, w: 24, h: 24 };
-      if (aabbOverlap(p, mBox)) { m.taken = true; state.score += 500; }
+      if (aabbOverlap(p, mBox)) {
+        m.taken = true;
+        state.score += 500;
+        if (state.lives < MAX_LIVES) { state.lives++; announce('Extra life! ' + state.lives + ' lives.'); }
+        Audio.sfx.powerup();
+        Particles.burst(m.x - state.cameraX, m.y, '#d9b8ff', 14);
+      }
     }
 
     // --- Enemies ---
-    for (const en of enemies) {
+    for (const en of current.enemies) {
       if (!en.alive) continue;
       if (!aabbOverlap(p, en)) continue;
 
@@ -326,55 +798,82 @@
         en.squashT = 0.25;
         p.vy = JUMP_VELOCITY * 0.55; // small bounce after stomping
         state.score += 200;
+        Audio.sfx.stomp();
+        Particles.burst(en.x + en.w / 2 - state.cameraX, en.y + en.h, '#0c0810', 10);
       } else if (p.invuln <= 0) {
+        state.lives--;
+        Audio.sfx.hurt();
+        announce(state.lives > 0 ? ('Hit! ' + state.lives + ' lives left.') : 'Hit! Game over.');
         p.invuln = INVULN_TIME;
-        // knockback away from the enemy
+        // Knockback away from the enemy - the player keeps their position and
+        // progress instead of being teleported back to the level start.
         p.vx = (p.x < en.x ? -1 : 1) * 220;
         p.vy = -300;
-        respawnAfterDeath();
-        return;
+        if (state.lives <= 0) { endGame(); return; }
       }
     }
 
-    // --- Flag / victory ---
-    if (p.x + p.w >= FLAG_X) {
-      state.mode = 'victory';
+    // --- Flag / level end ---
+    if (p.x + p.w >= current.def.flagX) {
+      if (state.levelIndex < LEVELS.length - 1) {
+        state.mode = 'levelclear';
+        state.transitionTimer = 2.2;
+        Audio.sfx.levelclear();
+        announce('Level clear! Get ready for the next level.');
+      } else {
+        state.mode = 'victory';
+        Audio.sfx.victory();
+        saveBestScore();
+        announce('You win! Final score ' + state.score + '.');
+      }
     }
   }
 
   function updateEnemies(dt) {
-    for (const en of enemies) {
-      if (!en.alive) {
-        en.squashT -= dt;
-        continue;
+    for (const en of current.enemies) {
+      if (!en.alive) { en.squashT -= dt; continue; }
+      en.t += dt;
+
+      if (en.type === 'wraith') {
+        en.x += en.vx * dt;
+        en.y = en.baseY + Math.sin(en.t * WRAITH_FREQ) * WRAITH_AMPLITUDE;
+        if (en.x <= en.patrolMin) { en.x = en.patrolMin; en.vx = WRAITH_SPEED; }
+        if (en.x + en.w >= en.patrolMax) { en.x = en.patrolMax - en.w; en.vx = -WRAITH_SPEED; }
+      } else {
+        const speed = en.type === 'fast' ? FAST_ENEMY_SPEED : ENEMY_SPEED;
+        en.vy += GRAVITY * dt;
+        en.vy = Math.min(MAX_FALL_SPEED, en.vy);
+        moveAndCollide(en, en.vx * dt, en.vy * dt);
+        if (en.x <= en.patrolMin) { en.x = en.patrolMin; en.vx = speed; }
+        if (en.x + en.w >= en.patrolMax) { en.x = en.patrolMax - en.w; en.vx = -speed; }
       }
-
-      en.vy += GRAVITY * dt;
-      en.vy = Math.min(MAX_FALL_SPEED, en.vy);
-      moveAndCollide(en, en.vx * dt, en.vy * dt);
-
-      // Reverse at patrol bounds or when blocked by a wall
-      if (en.x <= en.patrolMin) { en.x = en.patrolMin; en.vx = ENEMY_SPEED; }
-      if (en.x + en.w >= en.patrolMax) { en.x = en.patrolMax - en.w; en.vx = -ENEMY_SPEED; }
     }
-    // Drop fully-squashed enemies out of the array for tidiness
-    for (let i = enemies.length - 1; i >= 0; i--) {
-      if (!enemies[i].alive && enemies[i].squashT <= -1) enemies.splice(i, 1);
+    for (let i = current.enemies.length - 1; i >= 0; i--) {
+      if (!current.enemies[i].alive && current.enemies[i].squashT <= -1) current.enemies.splice(i, 1);
     }
   }
 
   function updateCamera() {
     let target = player.x + player.w / 2 - VIEW_W / 2;
-    target = Math.max(0, Math.min(LEVEL_WIDTH - VIEW_W, target));
-    // Smooth follow
+    target = Math.max(0, Math.min(current.def.width - VIEW_W, target));
     state.cameraX += (target - state.cameraX) * 0.15;
   }
 
   function update(dt) {
+    if (state.mode === 'levelclear') {
+      state.transitionTimer -= dt;
+      if (state.transitionTimer <= 0) {
+        state.levelIndex++;
+        loadLevel(state.levelIndex);
+        state.mode = 'playing';
+      }
+      return;
+    }
     if (state.mode !== 'playing') return;
     updatePlayer(dt);
     if (state.mode !== 'playing') return;
     updateEnemies(dt);
+    Particles.update(dt);
     updateCamera();
   }
 
@@ -382,22 +881,23 @@
   // Drawing
   // ---------------------------------------------------------------------
   function drawBackground(t) {
-    // Night sky gradient
+    const pal = THEMES[current.def.theme];
+
     const sky = ctx.createLinearGradient(0, 0, 0, VIEW_H);
-    sky.addColorStop(0, '#05040a');
-    sky.addColorStop(0.55, '#0d0a1f');
-    sky.addColorStop(1, '#1a1230');
+    sky.addColorStop(0, pal.skyTop);
+    sky.addColorStop(0.55, pal.skyMid);
+    sky.addColorStop(1, pal.skyBottom);
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
-    // Twinkling stars (slow parallax)
+    const levelSpan = current.def.width + VIEW_W;
     const starParallax = state.cameraX * 0.15;
     ctx.fillStyle = '#fff';
-    for (const star of STARS) {
+    for (const star of stars) {
       const sx = star.x - starParallax;
-      const wrapped = ((sx % (LEVEL_WIDTH + VIEW_W)) + (LEVEL_WIDTH + VIEW_W)) % (LEVEL_WIDTH + VIEW_W);
+      const wrapped = ((sx % levelSpan) + levelSpan) % levelSpan;
       if (wrapped > VIEW_W) continue;
-      const twinkle = 0.35 + Math.abs(Math.sin(t * 1.6 + star.phase)) * 0.65;
+      const twinkle = settings.reducedMotion ? 0.6 : 0.35 + Math.abs(Math.sin(t * 1.6 + star.phase)) * 0.65;
       ctx.globalAlpha = twinkle;
       ctx.beginPath();
       ctx.arc(wrapped, star.y, star.r, 0, Math.PI * 2);
@@ -405,36 +905,33 @@
     }
     ctx.globalAlpha = 1;
 
-    // Pale, sickly moon with a soft glow
     const moonParallax = state.cameraX * 0.08;
     const moonX = VIEW_W * 0.78 - moonParallax % (VIEW_W * 1.4);
     const moonY = 80;
     const glow = ctx.createRadialGradient(moonX, moonY, 10, moonX, moonY, 90);
-    glow.addColorStop(0, 'rgba(226, 220, 180, 0.35)');
+    glow.addColorStop(0, pal.moonGlow);
     glow.addColorStop(1, 'rgba(226, 220, 180, 0)');
     ctx.fillStyle = glow;
     ctx.fillRect(moonX - 90, moonY - 90, 180, 180);
-    ctx.fillStyle = '#e6dfb8';
+    ctx.fillStyle = pal.moonColor;
     ctx.beginPath();
     ctx.arc(moonX, moonY, 34, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = 'rgba(150, 140, 110, 0.4)';
+    ctx.fillStyle = pal.moonCrater;
     ctx.beginPath();
     ctx.arc(moonX - 10, moonY - 8, 6, 0, Math.PI * 2);
     ctx.arc(moonX + 8, moonY + 10, 4, 0, Math.PI * 2);
     ctx.arc(moonX + 12, moonY - 12, 3, 0, Math.PI * 2);
     ctx.fill();
 
-    // Dead black silhouette hills with gnarled tree spikes
     const parallax = state.cameraX * 0.3;
-    ctx.fillStyle = '#0a0812';
-    for (let i = -1; i < 6; i++) {
+    ctx.fillStyle = pal.hill;
+    for (let i = -1; i < Math.ceil(current.def.width / 260) + 2; i++) {
       const hx = i * 260 - (parallax % 260);
       ctx.beginPath();
       ctx.arc(hx + 100, GROUND_Y + 20, 90, Math.PI, 0);
       ctx.fill();
-      // bare twisted branches jutting from the hill crest
-      ctx.strokeStyle = '#0a0812';
+      ctx.strokeStyle = pal.hill;
       ctx.lineWidth = 3;
       for (let b = 0; b < 3; b++) {
         const bx = hx + 40 + b * 30;
@@ -449,11 +946,10 @@
       }
     }
 
-    // Drifting ground fog
     const parallax2 = state.cameraX * 0.5;
-    ctx.fillStyle = 'rgba(200, 210, 220, 0.10)';
+    ctx.fillStyle = pal.fog;
     for (let i = -1; i < 8; i++) {
-      const fx = i * 300 - (parallax2 % 300) + Math.sin(t * 0.3 + i) * 12;
+      const fx = i * 300 - (parallax2 % 300) + (settings.reducedMotion ? 0 : Math.sin(t * 0.3 + i) * 12);
       const fy = GROUND_Y - 30 - (i % 3) * 18;
       drawFogPatch(fx, fy);
     }
@@ -468,17 +964,15 @@
   }
 
   function drawSolids() {
-    for (const s of solids) {
+    for (const s of current.def.solids) {
       const sx = s.x - state.cameraX;
       if (sx + s.w < 0 || sx > VIEW_W) continue;
 
       const isGround = s.y === GROUND_Y;
       ctx.fillStyle = isGround ? '#2b1f22' : '#3b2740';
       ctx.fillRect(sx, s.y, s.w, s.h);
-      // top highlight strip: dead moss / dried blood tint
       ctx.fillStyle = isGround ? '#3a3320' : '#5c2a3a';
       ctx.fillRect(sx, s.y, s.w, 8);
-      // cracked texture
       ctx.strokeStyle = 'rgba(0,0,0,0.4)';
       ctx.lineWidth = 1;
       for (let bx = 0; bx < s.w; bx += 20) {
@@ -491,11 +985,11 @@
   }
 
   function drawCoins(t) {
-    for (const c of coins) {
+    for (const c of current.coins) {
       if (c.taken) continue;
       const cx = c.x - state.cameraX;
       if (cx < -20 || cx > VIEW_W + 20) continue;
-      const squish = Math.abs(Math.sin(t * 4 + c.x));
+      const squish = settings.reducedMotion ? 0.6 : Math.abs(Math.sin(t * 4 + c.x));
       ctx.save();
       ctx.translate(cx, c.y);
       ctx.scale(0.3 + squish * 0.7, 1);
@@ -514,19 +1008,16 @@
   }
 
   function drawMushrooms() {
-    for (const m of mushrooms) {
+    for (const m of current.mushrooms) {
       if (m.taken) continue;
       const mx = m.x - state.cameraX;
       if (mx < -24 || mx > VIEW_W + 24) continue;
-      // stem
       ctx.fillStyle = '#cbb896';
       ctx.fillRect(mx - 7, m.y, 14, 12);
-      // cap
       ctx.fillStyle = '#4a1030';
       ctx.beginPath();
       ctx.arc(mx, m.y, 13, Math.PI, 0);
       ctx.fill();
-      // glowing spores
       ctx.shadowColor = '#b98cff';
       ctx.shadowBlur = 8;
       ctx.fillStyle = '#d9b8ff';
@@ -540,26 +1031,42 @@
   }
 
   function drawEnemies() {
-    for (const en of enemies) {
+    for (const en of current.enemies) {
       const ex = en.x - state.cameraX;
       if (ex + en.w < 0 || ex > VIEW_W) continue;
 
       ctx.save();
       if (!en.alive) {
-        // squashed death animation: flatten vertically
         ctx.translate(ex, en.y + en.h);
         ctx.scale(1, 0.2);
         ctx.translate(-ex, -(en.y + en.h));
       }
 
-      // body: matte black shadow-creature silhouette
-      ctx.fillStyle = '#0c0810';
+      if (en.type === 'wraith') {
+        // Ghostly floating orb, visually distinct from the ground stalkers.
+        ctx.shadowColor = '#b98cff';
+        ctx.shadowBlur = 16;
+        ctx.fillStyle = 'rgba(180, 150, 220, 0.55)';
+        ctx.beginPath();
+        ctx.ellipse(ex + en.w / 2, en.y + en.h / 2, en.w / 2, en.h / 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#ff2a2a';
+        ctx.beginPath();
+        ctx.arc(ex + en.w / 2 - 6, en.y + en.h / 2, 3, 0, Math.PI * 2);
+        ctx.arc(ex + en.w / 2 + 6, en.y + en.h / 2, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        continue;
+      }
+
+      const bodyColor = en.type === 'fast' ? '#241018' : '#0c0810';
+      ctx.fillStyle = bodyColor;
       ctx.beginPath();
       ctx.ellipse(ex + en.w / 2, en.y + en.h / 2 + 2, en.w / 2, en.h / 2, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // jagged spikes along its back
-      ctx.fillStyle = '#0c0810';
+      ctx.fillStyle = bodyColor;
       for (let sp = 0; sp < 3; sp++) {
         const spx = ex + 6 + sp * 9;
         ctx.beginPath();
@@ -570,12 +1077,10 @@
         ctx.fill();
       }
 
-      // clawed feet
       ctx.fillStyle = '#050308';
       ctx.fillRect(ex + 2, en.y + en.h - 6, 8, 6);
       ctx.fillRect(ex + en.w - 10, en.y + en.h - 6, 8, 6);
 
-      // sharp teeth
       ctx.fillStyle = '#e8e2ea';
       ctx.beginPath();
       ctx.moveTo(ex + en.w / 2 - 8, en.y + en.h / 2 + 6);
@@ -586,7 +1091,6 @@
       ctx.closePath();
       ctx.fill();
 
-      // glowing red eyes
       ctx.shadowColor = '#ff2a2a';
       ctx.shadowBlur = 10;
       ctx.fillStyle = '#ff2a2a';
@@ -601,7 +1105,7 @@
   }
 
   function drawFlag() {
-    const fx = FLAG_X - state.cameraX;
+    const fx = current.def.flagX - state.cameraX;
     if (fx < -20 || fx > VIEW_W + 20) return;
     ctx.fillStyle = '#3a3540';
     ctx.fillRect(fx, GROUND_Y - 220, 6, 220);
@@ -619,7 +1123,6 @@
 
   function drawPlayer() {
     const p = player;
-    // Flash while invulnerable
     if (p.invuln > 0 && Math.floor(p.invuln * 12) % 2 === 0) return;
 
     const px = p.x - state.cameraX;
@@ -628,14 +1131,12 @@
     ctx.scale(p.facing, 1);
     ctx.translate(-p.w / 2, 0);
 
-    // Legs: dark stockings + boots
     ctx.fillStyle = '#1c1620';
     ctx.fillRect(4, p.y + 26, 20, 14);
     ctx.fillStyle = '#0c0810';
     ctx.fillRect(3, p.y + 36, 10, 5);
     ctx.fillRect(15, p.y + 36, 10, 5);
 
-    // Flared skirt (dark maroon), drawn as a trapezoid
     ctx.fillStyle = '#5c1030';
     ctx.beginPath();
     ctx.moveTo(6, p.y + 14);
@@ -645,11 +1146,9 @@
     ctx.closePath();
     ctx.fill();
 
-    // Blouse
     ctx.fillStyle = '#e7e1ea';
     ctx.fillRect(4, p.y + 12, 20, 6);
 
-    // Long dark hair falling behind the head/shoulders
     ctx.fillStyle = '#140d18';
     ctx.beginPath();
     ctx.moveTo(3, p.y - 2);
@@ -666,17 +1165,14 @@
     ctx.closePath();
     ctx.fill();
 
-    // Head
     ctx.fillStyle = '#f0c9a0';
     ctx.fillRect(6, p.y, 16, 14);
 
-    // Hair top + bangs
     ctx.fillStyle = '#140d18';
     ctx.fillRect(4, p.y - 4, 20, 7);
     ctx.fillRect(6, p.y, 5, 5);
     ctx.fillRect(17, p.y, 5, 5);
 
-    // Small bow
     ctx.fillStyle = '#8f2d56';
     ctx.beginPath();
     ctx.arc(24, p.y - 2, 3.2, 0, Math.PI * 2);
@@ -685,7 +1181,6 @@
     ctx.fillStyle = '#5c1030';
     ctx.fillRect(22.5, p.y - 0.5, 3, 3);
 
-    // Eye, given a faint glow for an eerie touch at night
     ctx.shadowColor = '#8f2d56';
     ctx.shadowBlur = 4;
     ctx.fillStyle = '#2a1030';
@@ -702,34 +1197,96 @@
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 20px monospace';
     ctx.textBaseline = 'middle';
-    ctx.fillText('SCORE: ' + state.score, 16, 22);
+    ctx.textAlign = 'left';
 
-    ctx.fillText('LIVES: ' + '❤ '.repeat(Math.max(0, state.lives)).trim(), 260, 22);
+    const scoreText = 'SCORE: ' + state.score;
+    ctx.fillText(scoreText, 16, 22);
 
-    const pct = Math.round(Math.min(100, (player.x / (FLAG_X)) * 100));
-    ctx.fillText('PROGRESS: ' + pct + '%', VIEW_W - 220, 22);
+    const livesText = 'LIVES: ' + '❤ '.repeat(Math.max(0, state.lives)).trim();
+    ctx.fillText(livesText, 16 + ctx.measureText(scoreText).width + 30, 22);
+
+    const pct = Math.round(Math.min(100, (player.x / current.def.flagX) * 100));
+    const progressText = 'PROGRESS: ' + pct + '%';
+    ctx.textAlign = 'right';
+    ctx.fillText(progressText, VIEW_W - 16, 22);
+    ctx.textAlign = 'left';
+  }
+
+  function drawPauseOverlay() {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 36px monospace';
+    ctx.fillText('PAUSED', VIEW_W / 2, VIEW_H / 2 - 10);
+    ctx.font = '16px monospace';
+    ctx.fillText('Press P or Escape to resume', VIEW_W / 2, VIEW_H / 2 + 26);
+    ctx.textAlign = 'left';
+  }
+
+  function drawIntroOverlay() {
+    ctx.fillStyle = 'rgba(0,0,0,0.72)';
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#ffd23f';
+    ctx.font = 'bold 34px monospace';
+    ctx.fillText('SUPER PLUMBER BROS', VIEW_W / 2, VIEW_H / 2 - 90);
+    ctx.fillStyle = '#e7e1ea';
+    ctx.font = '18px monospace';
+    ctx.fillText('A Dark Descent', VIEW_W / 2, VIEW_H / 2 - 58);
+
+    ctx.font = '15px monospace';
+    const lines = [
+      'Move: ← → / A D      Jump: Space / ↑ / W',
+      'Hold Jump longer to jump higher. Stomp foes from above.',
+      'Grab mushrooms for an extra life. Pass checkpoints to save progress.',
+      'P = Pause    M = Mute    R = Reduced motion',
+      isTouchDevice ? 'Or use the on-screen touch controls below.' : '',
+    ];
+    lines.forEach((line, i) => { if (line) ctx.fillText(line, VIEW_W / 2, VIEW_H / 2 - 10 + i * 24); });
+
+    ctx.fillStyle = '#ffd23f';
+    ctx.font = 'bold 18px monospace';
+    ctx.fillText(isTouchDevice ? 'Tap anywhere to start' : 'Press any key to start', VIEW_W / 2, VIEW_H / 2 + 118);
+    ctx.textAlign = 'left';
+  }
+
+  function drawLevelClearOverlay() {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#7fffd4';
+    ctx.font = 'bold 34px monospace';
+    ctx.fillText('LEVEL ' + (state.levelIndex + 1) + ' CLEAR!', VIEW_W / 2, VIEW_H / 2 - 10);
+    ctx.fillStyle = '#fff';
+    ctx.font = '16px monospace';
+    ctx.fillText('Entering ' + LEVELS[state.levelIndex + 1].name + '...', VIEW_W / 2, VIEW_H / 2 + 24);
+    ctx.textAlign = 'left';
   }
 
   function drawOverlay() {
-    if (state.mode === 'playing') return;
+    if (state.mode === 'intro') { drawIntroOverlay(); return; }
+    if (state.mode === 'levelclear') { drawLevelClearOverlay(); return; }
+    if (state.mode !== 'gameover' && state.mode !== 'victory') return;
 
     ctx.fillStyle = 'rgba(0,0,0,0.65)';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
     ctx.textAlign = 'center';
     ctx.fillStyle = state.mode === 'victory' ? '#ffd23f' : '#e03c31';
-    ctx.font = 'bold 48px monospace';
-    ctx.fillText(state.mode === 'victory' ? 'YOU WIN!' : 'GAME OVER', VIEW_W / 2, VIEW_H / 2 - 30);
+    ctx.font = 'bold 44px monospace';
+    ctx.fillText(state.mode === 'victory' ? 'YOU WIN!' : 'GAME OVER', VIEW_W / 2, VIEW_H / 2 - 50);
 
     ctx.fillStyle = '#fff';
-    ctx.font = '20px monospace';
-    ctx.fillText('Final Score: ' + state.score, VIEW_W / 2, VIEW_H / 2 + 15);
-    ctx.fillText('Press ENTER or SPACE to restart', VIEW_W / 2, VIEW_H / 2 + 50);
+    ctx.font = '18px monospace';
+    ctx.fillText('Final Score: ' + state.score + '   Best: ' + settings.bestScore, VIEW_W / 2, VIEW_H / 2 - 5);
+    ctx.fillText('Coins collected: ' + state.coinsCollectedTotal + ' / ' + state.coinsTotalAll, VIEW_W / 2, VIEW_H / 2 + 22);
+    ctx.fillText('Press ENTER or SPACE to restart', VIEW_W / 2, VIEW_H / 2 + 56);
     ctx.textAlign = 'left';
   }
 
   function drawVignette(t) {
-    const flicker = 0.7 + Math.sin(t * 2.3) * 0.05 + Math.random() * 0.03;
+    const flicker = settings.reducedMotion ? 0.72 : 0.7 + Math.sin(t * 2.3) * 0.05 + Math.random() * 0.03;
     const grad = ctx.createRadialGradient(
       VIEW_W / 2, VIEW_H / 2, VIEW_H * 0.22,
       VIEW_W / 2, VIEW_H / 2, VIEW_H * 0.75
@@ -748,30 +1305,54 @@
     drawFlag();
     drawEnemies();
     drawPlayer();
+    Particles.draw(state.cameraX);
     drawVignette(t);
     drawHUD();
+    if (state.paused && state.mode === 'playing') drawPauseOverlay();
     drawOverlay();
   }
 
   // ---------------------------------------------------------------------
   // Main loop (fixed-step physics driven by real delta time, clamped to
-  // avoid huge jumps if the tab was backgrounded)
+  // avoid huge jumps if the tab was backgrounded). Wrapped defensively so a
+  // single unexpected exception logs instead of freezing the whole game.
   // ---------------------------------------------------------------------
   let lastTime = null;
 
   function frame(timestamp) {
     if (lastTime === null) lastTime = timestamp;
     let dt = (timestamp - lastTime) / 1000;
-    dt = Math.min(dt, 1 / 30); // clamp so tab-switching doesn't cause tunneling
+    dt = Math.min(Math.max(dt, 0), 1 / 30); // clamp so tab-switching doesn't cause tunneling
     lastTime = timestamp;
 
-    update(dt);
-    draw(timestamp / 1000);
+    try {
+      if (!state.paused) update(dt);
+    } catch (e) {
+      console.error('Update error (recovering next frame):', e);
+    }
+    try {
+      draw(timestamp / 1000);
+    } catch (e) {
+      console.error('Draw error:', e);
+    }
 
     requestAnimationFrame(frame);
   }
 
   requestAnimationFrame(frame);
+
+  // Read-only debug hook for automated QA/smoke testing (see tests/smoke.spec.js).
+  window.__SPB_DEBUG__ = {
+    getState: () => ({ mode: state.mode, paused: state.paused, score: state.score, lives: state.lives, levelIndex: state.levelIndex }),
+    getPlayer: () => ({ x: player.x, y: player.y, vx: player.vx, vy: player.vy, invuln: player.invuln }),
+    getLevel: () => ({ checkpointX: current.checkpointX, coinsTaken: current.coins.filter(c => c.taken).length, coinsTotal: current.coins.length, enemiesAlive: current.enemies.filter(e => e.alive).length, enemies: current.enemies.map(e => ({ x: e.x, y: e.y, alive: e.alive, type: e.type })) }),
+    getSettings: () => ({ muted: settings.muted, reducedMotion: settings.reducedMotion, bestScore: settings.bestScore }),
+    // QA-only conveniences below (not reachable from normal play input):
+    teleport: (x, y) => { player.x = x; player.y = (y !== undefined ? y : GROUND_Y - player.h); player.vx = 0; player.vy = 0; },
+    jumpToLevel: (i) => { state.levelIndex = i; loadLevel(i); state.mode = 'playing'; },
+    forceGameOver: () => endGame(),
+    forceVictory: () => { state.mode = 'victory'; saveBestScore(); },
+  };
 })();
 </script>
 </body>
