@@ -1,0 +1,24 @@
+name: Deploy Mario game to server
+
+on:
+  push:
+    branches: [claude/cool-albattani-5lyj8f]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Copy mario.html to server via SCP
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          source: "mario.html"
+          target: "/var/www/html"
+          strip_components: 0
