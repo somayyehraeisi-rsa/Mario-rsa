@@ -8,7 +8,7 @@
 
   html, body {
     height: 100%;
-    background: #1a1a2e;
+    background: #2a2a4a;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -31,13 +31,15 @@
   }
 
   canvas {
-    background: #05050f;
+    background: #2a3a5f;
     border: 6px solid #111;
     border-radius: 6px;
     box-shadow: 0 0 0 4px #3a1f4d, 0 10px 40px rgba(0,0,0,0.85);
     image-rendering: pixelated;
     image-rendering: crisp-edges;
-    max-width: 95vw;
+    max-width: 98vw;
+    max-height: 95vh;
+    width: auto;
     height: auto;
   }
 
@@ -51,7 +53,7 @@
 
 <div id="gameWrap">
   <div id="title">SUPER PLUMBER BROS</div>
-  <canvas id="game" width="800" height="480"></canvas>
+  <canvas id="game" width="1100" height="660"></canvas>
   <div id="hint">Move: ← → / A D &nbsp;|&nbsp; Jump: Space / ↑ / W &nbsp;|&nbsp; Stomp Goombas from above!</div>
 </div>
 
@@ -98,6 +100,32 @@
   window.addEventListener('keyup', (e) => { keys[e.key] = false; });
 
   function isDown(action) { return bind[action].some(k => keys[k]); }
+
+  // ---------------------------------------------------------------------
+  // Sound effects (synthesized, no audio files needed)
+  // ---------------------------------------------------------------------
+  let audioCtx = null;
+  function getAudioCtx() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+
+  function playCoinSound() {
+    const ac = getAudioCtx();
+    const now = ac.currentTime;
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(988, now);        // B5
+    osc.frequency.setValueAtTime(1319, now + 0.08); // E6
+    gain.gain.setValueAtTime(0.18, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+    osc.connect(gain);
+    gain.connect(ac.destination);
+    osc.start(now);
+    osc.stop(now + 0.28);
+  }
 
   // ---------------------------------------------------------------------
   // Level geometry: solid platforms/ground as AABB rectangles
@@ -303,7 +331,7 @@
     for (const c of coins) {
       if (c.taken) continue;
       const cBox = { x: c.x - 10, y: c.y - 10, w: 20, h: 20 };
-      if (aabbOverlap(p, cBox)) { c.taken = true; state.score += 100; }
+      if (aabbOverlap(p, cBox)) { c.taken = true; state.score += 100; playCoinSound(); }
     }
 
     // --- Mushrooms ---
@@ -382,11 +410,11 @@
   // Drawing
   // ---------------------------------------------------------------------
   function drawBackground(t) {
-    // Night sky gradient
+    // Twilight sky gradient (brighter than before)
     const sky = ctx.createLinearGradient(0, 0, 0, VIEW_H);
-    sky.addColorStop(0, '#05040a');
-    sky.addColorStop(0.55, '#0d0a1f');
-    sky.addColorStop(1, '#1a1230');
+    sky.addColorStop(0, '#2b3d6e');
+    sky.addColorStop(0.55, '#3d4f8a');
+    sky.addColorStop(1, '#5a5a9a');
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
@@ -410,11 +438,11 @@
     const moonX = VIEW_W * 0.78 - moonParallax % (VIEW_W * 1.4);
     const moonY = 80;
     const glow = ctx.createRadialGradient(moonX, moonY, 10, moonX, moonY, 90);
-    glow.addColorStop(0, 'rgba(226, 220, 180, 0.35)');
-    glow.addColorStop(1, 'rgba(226, 220, 180, 0)');
+    glow.addColorStop(0, 'rgba(255, 250, 210, 0.55)');
+    glow.addColorStop(1, 'rgba(255, 250, 210, 0)');
     ctx.fillStyle = glow;
     ctx.fillRect(moonX - 90, moonY - 90, 180, 180);
-    ctx.fillStyle = '#e6dfb8';
+    ctx.fillStyle = '#fff8dd';
     ctx.beginPath();
     ctx.arc(moonX, moonY, 34, 0, Math.PI * 2);
     ctx.fill();
@@ -425,16 +453,16 @@
     ctx.arc(moonX + 12, moonY - 12, 3, 0, Math.PI * 2);
     ctx.fill();
 
-    // Dead black silhouette hills with gnarled tree spikes
+    // Silhouette hills with gnarled tree spikes
     const parallax = state.cameraX * 0.3;
-    ctx.fillStyle = '#0a0812';
+    ctx.fillStyle = '#242c52';
     for (let i = -1; i < 6; i++) {
       const hx = i * 260 - (parallax % 260);
       ctx.beginPath();
       ctx.arc(hx + 100, GROUND_Y + 20, 90, Math.PI, 0);
       ctx.fill();
       // bare twisted branches jutting from the hill crest
-      ctx.strokeStyle = '#0a0812';
+      ctx.strokeStyle = '#242c52';
       ctx.lineWidth = 3;
       for (let b = 0; b < 3; b++) {
         const bx = hx + 40 + b * 30;
@@ -451,7 +479,7 @@
 
     // Drifting ground fog
     const parallax2 = state.cameraX * 0.5;
-    ctx.fillStyle = 'rgba(200, 210, 220, 0.10)';
+    ctx.fillStyle = 'rgba(220, 230, 255, 0.18)';
     for (let i = -1; i < 8; i++) {
       const fx = i * 300 - (parallax2 % 300) + Math.sin(t * 0.3 + i) * 12;
       const fy = GROUND_Y - 30 - (i % 3) * 18;
@@ -473,10 +501,10 @@
       if (sx + s.w < 0 || sx > VIEW_W) continue;
 
       const isGround = s.y === GROUND_Y;
-      ctx.fillStyle = isGround ? '#2b1f22' : '#3b2740';
+      ctx.fillStyle = isGround ? '#5a4a4e' : '#5f4a70';
       ctx.fillRect(sx, s.y, s.w, s.h);
-      // top highlight strip: dead moss / dried blood tint
-      ctx.fillStyle = isGround ? '#3a3320' : '#5c2a3a';
+      // top highlight strip
+      ctx.fillStyle = isGround ? '#7a7048' : '#9a5a72';
       ctx.fillRect(sx, s.y, s.w, 8);
       // cracked texture
       ctx.strokeStyle = 'rgba(0,0,0,0.4)';
@@ -729,7 +757,7 @@
   }
 
   function drawVignette(t) {
-    const flicker = 0.7 + Math.sin(t * 2.3) * 0.05 + Math.random() * 0.03;
+    const flicker = 0.3 + Math.sin(t * 2.3) * 0.03 + Math.random() * 0.02;
     const grad = ctx.createRadialGradient(
       VIEW_W / 2, VIEW_H / 2, VIEW_H * 0.22,
       VIEW_W / 2, VIEW_H / 2, VIEW_H * 0.75
