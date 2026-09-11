@@ -1,0 +1,50 @@
+name: Check Supabase connection
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check-connection:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify SUPA secret can reach Supabase
+        env:
+          SUPA: ${{ secrets.SUPA }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUPA:-}" ]; then
+            echo "::error::SUPA secret is not set on this repository."
+            exit 1
+          fi
+
+          PAYLOAD=$(echo "$SUPA" | cut -d '.' -f2)
+          MOD=$(( ${#PAYLOAD} % 4 ))
+          if [ "$MOD" -eq 2 ]; then PAYLOAD="${PAYLOAD}=="
+          elif [ "$MOD" -eq 3 ]; then PAYLOAD="${PAYLOAD}="
+          fi
+
+          DECODED=$(echo "$PAYLOAD" | tr '_-' '/+' | base64 -d 2>/dev/null || true)
+          REF=$(echo "$DECODED" | jq -r '.ref // empty' 2>/dev/null || true)
+
+          if [ -z "$REF" ]; then
+            echo "::error::Could not extract a Supabase project ref from SUPA. Is it a valid Supabase API key (JWT)?"
+            exit 1
+          fi
+
+          URL="https://${REF}.supabase.co/rest/v1/"
+          echo "Detected Supabase project ref: $REF"
+
+          STATUS=$(curl -s -o /tmp/resp.txt -w "%{http_code}" "$URL" -H "apikey: $SUPA")
+          echo "HTTP status from $URL: $STATUS"
+
+          if [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 300 ]; then
+            echo "✅ Successfully connected to Supabase project '$REF' using SUPA."
+          else
+            echo "::error::Supabase responded with HTTP $STATUS — the key may be invalid, revoked, or the project may be paused."
+            cat /tmp/resp.txt
+            exit 1
+          fi
