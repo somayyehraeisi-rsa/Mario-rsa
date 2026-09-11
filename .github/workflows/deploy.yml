@@ -20,5 +20,5 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT }}
           source: "mario.html"
-          target: "/var/www/html"
+          target: "/srv/www/p14"
           strip_components: 0
