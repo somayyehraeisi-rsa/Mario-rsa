@@ -29,6 +29,7 @@ jobs:
 
           DECODED=$(echo "$PAYLOAD" | tr '_-' '/+' | base64 -d 2>/dev/null || true)
           REF=$(echo "$DECODED" | jq -r '.ref // empty' 2>/dev/null || true)
+          ROLE=$(echo "$DECODED" | jq -r '.role // empty' 2>/dev/null || true)
 
           if [ -z "$REF" ]; then
             echo "::error::Could not extract a Supabase project ref from SUPA. Is it a valid Supabase API key (JWT)?"
@@ -37,6 +38,7 @@ jobs:
 
           URL="https://${REF}.supabase.co/rest/v1/"
           echo "Detected Supabase project ref: $REF"
+          echo "Detected key role: ${ROLE:-unknown}"
 
           STATUS=$(curl -s -o /tmp/resp.txt -w "%{http_code}" "$URL" -H "apikey: $SUPA")
           echo "HTTP status from $URL: $STATUS"
