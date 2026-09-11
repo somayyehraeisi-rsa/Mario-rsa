@@ -1,0 +1,65 @@
+name: Design ElevenLabs voices
+
+on:
+  workflow_dispatch:
+    inputs:
+      voice1_name:
+        description: "Name for voice 1"
+        default: "Mira - Haunted Protagonist"
+      voice1_description:
+        description: "Voice Design prompt for voice 1"
+        default: >-
+          A young woman in her early twenties, weary and resolute, speaking
+          in a hushed, slightly breathless way as if always listening for
+          something behind her. Warm but strained, a faint melancholic
+          tremor, mid-range pitch, restrained emotion.
+      voice1_text:
+        description: "Sample line voice 1 will read for its preview"
+        default: >-
+          The fog does not care how brave you are. It swallows the path
+          behind you and dares you to keep walking. I have come too far to
+          turn back now, and further still than I ever meant to go.
+      voice2_name:
+        description: "Name for voice 2"
+        default: "The Hollow Narrator"
+      voice2_description:
+        description: "Voice Design prompt for voice 2"
+        default: >-
+          A low, gravelly, androgynous voice speaking slowly and
+          deliberately, as if each word costs something. Cold, dry, faintly
+          amused by your suffering, resonant chest tone, a slight rasp like
+          wind through a cracked door.
+      voice2_text:
+        description: "Sample line voice 2 will read for its preview"
+        default: >-
+          Another soul wanders into the hollow. How quaint. The moon has
+          seen a thousand of you come this way, and it has never once seen
+          one leave whole. Walk on, little spark. The dark is patient.
+
+permissions:
+  contents: write
+
+jobs:
+  design-voices:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Design and save voices via ElevenLabs
+        env:
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+          VOICE1_NAME: ${{ inputs.voice1_name }}
+          VOICE1_DESCRIPTION: ${{ inputs.voice1_description }}
+          VOICE1_TEXT: ${{ inputs.voice1_text }}
+          VOICE2_NAME: ${{ inputs.voice2_name }}
+          VOICE2_DESCRIPTION: ${{ inputs.voice2_description }}
+          VOICE2_TEXT: ${{ inputs.voice2_text }}
+        run: python3 .github/scripts/design_voices.py
+
+      - name: Commit generated voices
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add assets/voices
+          git diff --cached --quiet || git commit -m "Add ElevenLabs-designed voices"
+          git push
