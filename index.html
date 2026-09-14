@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Super Plumber Bros</title>
+<title>Miss Mario in Hotel Transylvania</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   html, body {
     height: 100%;
-    background: #050409;
+    background: #050308;
   }
 
   .scene {
@@ -19,59 +19,125 @@
     justify-content: center;
   }
 
-  /* Frame keeps the exact 1376x768 aspect ratio of the artwork so the
-     Start Game hotspot below always lines up with the button painted
-     into the image, at any viewport size. */
+  /* Frame keeps a fixed 1376x768 aspect ratio so every layer inside
+     (art, title, hotspot) stays lined up at any viewport size. */
   .frame {
     position: relative;
     width: 100%;
     max-width: 1376px;
     aspect-ratio: 1376 / 768;
+    overflow: hidden;
   }
 
-  .frame img {
-    display: block;
+  .frame svg {
+    position: absolute;
+    inset: 0;
     width: 100%;
     height: 100%;
-    object-fit: contain;
+    display: block;
   }
 
-  /* Clickable hotspot placed exactly over the "START GAME" panel that's
-     painted into the artwork, sized/positioned as % of the frame. */
-  .start-hotspot {
+  .bat {
+    animation: flap 4.5s ease-in-out infinite;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+  .bat2 { animation-duration: 5.6s; animation-delay: -1.2s; }
+  .bat3 { animation-duration: 3.8s; animation-delay: -2.4s; }
+
+  @keyframes flap {
+    0%   { transform: translate(0px, 0px) scale(1, 1); }
+    25%  { transform: translate(-40px, -14px) scale(1, 0.8); }
+    50%  { transform: translate(-90px, 4px) scale(1, 1); }
+    75%  { transform: translate(-140px, -10px) scale(1, 0.85); }
+    100% { transform: translate(-190px, 2px) scale(1, 1); }
+  }
+
+  /* ---- Title lockup ---- */
+  .title-block {
     position: absolute;
-    left: 35.97%;
-    top: 58.85%;
-    width: 27.62%;
-    height: 12.11%;
+    left: 50%;
+    top: 30%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    width: 90%;
+    pointer-events: none;
+    font-family: 'Trebuchet MS', 'Arial Black', sans-serif;
+    font-weight: 900;
+    line-height: 0.95;
+  }
+
+  .title-miss {
+    font-size: clamp(20px, 3.4vw, 46px);
+    letter-spacing: 0.12em;
+    color: #f6e8ff;
+    -webkit-text-stroke: 1.5px #3a1055;
+    text-shadow:
+      0 0 10px rgba(246, 130, 200, 0.9),
+      0 3px 0 #3a1055;
+  }
+
+  .title-in {
+    font-size: clamp(10px, 1.2vw, 16px);
+    letter-spacing: 0.5em;
+    color: #cbb9e0;
+    margin: 0.3em 0;
+    font-weight: 700;
+  }
+
+  .title-main {
+    font-size: clamp(34px, 6.4vw, 88px);
+    letter-spacing: 0.03em;
+    background: linear-gradient(180deg, #ff7fb0 0%, #d6345f 45%, #8f1638 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-stroke: 2px #2a0a1c;
+    text-shadow:
+      0 0 22px rgba(214, 52, 95, 0.85),
+      0 0 46px rgba(214, 52, 95, 0.5);
+  }
+
+  .press-start {
+    position: absolute;
+    left: 50%;
+    top: 68%;
+    transform: translate(-50%, -50%);
     background: transparent;
     border: 0;
-    border-radius: 6px;
+    padding: 10px 26px;
     cursor: pointer;
-    padding: 0;
-    transition: filter 0.15s ease, transform 0.08s ease;
+    font-family: 'Courier New', monospace;
+    font-weight: bold;
+    font-size: clamp(14px, 2vw, 22px);
+    letter-spacing: 0.25em;
+    color: #ffe6f2;
+    text-shadow: 0 0 10px #ff4d8f, 0 0 22px #ff4d8f;
+    animation: blink 1.3s steps(1) infinite;
   }
 
-  .start-hotspot:hover {
-    filter: drop-shadow(0 0 14px rgba(214, 52, 71, 0.9)) brightness(1.15);
+  .press-start:hover {
+    color: #fff;
+    text-shadow: 0 0 14px #ff7fb0, 0 0 30px #ff7fb0;
   }
 
-  .start-hotspot:active {
-    transform: scale(0.97);
+  .press-start:focus-visible {
+    outline: 2px solid #b98cff;
+    outline-offset: 6px;
   }
 
-  .start-hotspot:focus-visible {
-    outline: 3px solid #b98cff;
-    outline-offset: 4px;
+  @keyframes blink {
+    0%, 55% { opacity: 1; }
+    56%, 100% { opacity: 0.25; }
   }
 
   .hint {
     position: absolute;
     left: 0;
     right: 0;
-    bottom: 2.5%;
+    bottom: 2%;
     text-align: center;
-    color: #8a8398;
+    color: #8a7fa0;
     font-family: 'Courier New', monospace;
     font-size: clamp(10px, 1.4vw, 13px);
     letter-spacing: 0.02em;
@@ -84,16 +150,16 @@
     left: 4%;
     min-width: 140px;
     padding: 10px 14px;
-    background: rgba(5, 4, 9, 0.55);
-    border: 1px solid rgba(185, 140, 255, 0.35);
+    background: rgba(15, 6, 20, 0.55);
+    border: 1px solid rgba(255, 111, 168, 0.35);
     border-radius: 8px;
-    color: #cfc7da;
+    color: #e6d9ee;
     font-family: 'Courier New', monospace;
     font-size: clamp(10px, 1.3vw, 13px);
   }
 
   .leaderboard-title {
-    color: #b98cff;
+    color: #ff6fa8;
     letter-spacing: 0.08em;
     margin-bottom: 6px;
     font-weight: bold;
@@ -114,8 +180,107 @@
 
 <div class="scene">
   <div class="frame">
-    <img src="assets/home-screen.jpg" alt="Super Plumber Bros — A Dark Descent" width="1376" height="768">
-    <button class="start-hotspot" type="button" aria-label="Start Game"></button>
+    <svg viewBox="0 0 1376 768" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <defs>
+        <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#0a0818"/>
+          <stop offset="45%" stop-color="#1c1032"/>
+          <stop offset="80%" stop-color="#3a1748"/>
+          <stop offset="100%" stop-color="#170a20"/>
+        </linearGradient>
+        <radialGradient id="moonGlow" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="rgba(220,214,235,0.55)"/>
+          <stop offset="100%" stop-color="rgba(220,214,235,0)"/>
+        </radialGradient>
+        <radialGradient id="moonBody" cx="38%" cy="35%" r="70%">
+          <stop offset="0%" stop-color="#f4f0e2"/>
+          <stop offset="100%" stop-color="#cfc6a8"/>
+        </radialGradient>
+        <linearGradient id="fogGrad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="rgba(150,90,180,0)"/>
+          <stop offset="100%" stop-color="rgba(120,60,150,0.35)"/>
+        </linearGradient>
+      </defs>
+
+      <rect x="0" y="0" width="1376" height="768" fill="url(#sky)"/>
+
+      <!-- stars -->
+      <g fill="#fff" opacity="0.7">
+        <circle cx="120" cy="90" r="1.4"/><circle cx="260" cy="150" r="1"/>
+        <circle cx="410" cy="70" r="1.6"/><circle cx="600" cy="110" r="1"/>
+        <circle cx="180" cy="220" r="1"/><circle cx="820" cy="60" r="1.3"/>
+        <circle cx="1050" cy="130" r="1"/><circle cx="1250" cy="80" r="1.4"/>
+        <circle cx="1310" cy="220" r="1"/><circle cx="60" cy="300" r="1"/>
+        <circle cx="520" cy="200" r="1.2"/><circle cx="960" cy="240" r="1"/>
+      </g>
+
+      <!-- moon with glow -->
+      <circle cx="990" cy="185" r="150" fill="url(#moonGlow)"/>
+      <circle cx="990" cy="185" r="78" fill="url(#moonBody)"/>
+      <g fill="rgba(150,140,115,0.35)">
+        <circle cx="965" cy="165" r="12"/>
+        <circle cx="1015" cy="205" r="9"/>
+        <circle cx="1022" cy="160" r="6"/>
+        <circle cx="975" cy="215" r="5"/>
+      </g>
+
+      <!-- bats -->
+      <g class="bat bat1" transform="translate(1150,150) scale(1.1)">
+        <path d="M0,0 C-10,-8 -20,-4 -24,3 C-15,1 -9,4 0,9 C9,4 15,1 24,3 C20,-4 10,-8 0,0 Z" fill="#0c0812"/>
+      </g>
+      <g class="bat bat2" transform="translate(760,110) scale(0.85)">
+        <path d="M0,0 C-10,-8 -20,-4 -24,3 C-15,1 -9,4 0,9 C9,4 15,1 24,3 C20,-4 10,-8 0,0 Z" fill="#0c0812"/>
+      </g>
+      <g class="bat bat3" transform="translate(1260,260) scale(0.7)">
+        <path d="M0,0 C-10,-8 -20,-4 -24,3 C-15,1 -9,4 0,9 C9,4 15,1 24,3 C20,-4 10,-8 0,0 Z" fill="#0c0812"/>
+      </g>
+
+      <!-- distant hotel / castle skyline -->
+      <g fill="#0d0816">
+        <path d="M0,470 L0,430 L30,430 L30,410 L50,410 L50,430 L90,430 L90,395 L110,395 L110,375 L130,375 L130,395 L150,395 L150,430 L210,430 L210,405 L230,375 L250,405 L250,430 L320,430 L320,400 L340,400 L340,430 L400,430 L400,470 Z"/>
+        <path d="M980,470 L980,415 L1000,415 L1000,390 L1020,365 L1040,390 L1040,415 L1070,415 L1070,380 L1090,380 L1090,355 L1110,330 L1130,355 L1130,380 L1150,380 L1150,415 L1210,415 L1210,395 L1230,395 L1230,415 L1290,415 L1290,440 L1376,440 L1376,470 Z"/>
+      </g>
+      <g fill="rgba(255,224,150,0.55)">
+        <rect x="1018" y="372" width="5" height="7"/>
+        <rect x="1108" y="342" width="5" height="7"/>
+        <rect x="108" y="382" width="5" height="7"/>
+      </g>
+
+      <!-- bare trees flanking -->
+      <g stroke="#0a0712" stroke-width="4" fill="none" stroke-linecap="round">
+        <path d="M120,700 L128,600 M128,600 L108,555 M128,600 L150,560 M124,630 L100,600 M132,630 L158,610"/>
+        <path d="M840,700 L846,610 M846,610 L826,565 M846,610 L868,568"/>
+        <path d="M1300,700 L1308,590 L1288,540 M1308,590 L1332,548 M1300,650 L1276,615 M1300,650 L1326,625"/>
+      </g>
+
+      <!-- ground hill silhouette -->
+      <path d="M0,768 L0,650 Q 300,600 700,640 T 1376,630 L1376,768 Z" fill="#0a0612"/>
+
+      <!-- purple ground mist -->
+      <rect x="0" y="600" width="1376" height="168" fill="url(#fogGrad)"/>
+
+      <!-- tombstones -->
+      <g fill="#171025" stroke="#2c1e3a" stroke-width="2">
+        <path d="M70,700 v-55 a20,20 0 0 1 40,0 v55 Z"/>
+        <path d="M230,700 v-40 a16,16 0 0 1 32,0 v40 Z"/>
+        <path d="M980,700 v-45 a18,18 0 0 1 36,0 v45 Z"/>
+        <path d="M1150,700 v-60 a22,22 0 0 1 44,0 v60 Z"/>
+        <path d="M1290,700 v-38 a15,15 0 0 1 30,0 v38 Z"/>
+      </g>
+      <g fill="#463a56" font-family="'Courier New', monospace" font-size="9" text-anchor="middle" opacity="0.85">
+        <text x="90" y="680">R.I.P</text>
+        <text x="1170" y="685">R.I.P</text>
+      </g>
+    </svg>
+
+    <div class="title-block">
+      <div class="title-miss">MISS MARIO</div>
+      <div class="title-in">IN</div>
+      <div class="title-main">HOTEL<br>TRANSYLVANIA</div>
+    </div>
+
+    <button class="press-start" type="button" aria-label="Press Start">PRESS START</button>
+
     <div class="hint">Move: &larr; &rarr; / A D &nbsp;|&nbsp; Jump: Space / &uarr; / W</div>
     <div class="leaderboard">
       <div class="leaderboard-title">TOP SCORES</div>
@@ -154,7 +319,7 @@
 
   loadLeaderboard();
 
-  document.querySelector('.start-hotspot').addEventListener('click', () => {
+  document.querySelector('.press-start').addEventListener('click', () => {
     window.location.href = 'mario.html';
   });
 </script>

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Super Plumber Bros - Retro Platformer</title>
+<title>Miss Mario in Hotel Transylvania</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -25,17 +25,17 @@
   }
 
   #title {
-    color: #8f2d56;
-    text-shadow: 0 0 8px #d63447, 0 0 18px #d63447, 3px 3px 0 #000;
+    color: #ff6fa8;
+    text-shadow: 0 0 8px #d6345f, 0 0 18px #d6345f, 3px 3px 0 #000;
     letter-spacing: 2px;
-    font-size: clamp(18px, 2.4vw, 26px);
+    font-size: clamp(16px, 2.2vw, 24px);
   }
 
   canvas {
     background: #05050f;
-    border: 6px solid #111;
+    border: 6px solid #1a1022;
     border-radius: 6px;
-    box-shadow: 0 0 0 4px #3a1f4d, 0 10px 40px rgba(0,0,0,0.85);
+    box-shadow: 0 0 0 4px #4a2560, 0 10px 40px rgba(0,0,0,0.85);
     image-rendering: pixelated;
     image-rendering: crisp-edges;
     width: min(96vw, calc(88vh * 800 / 480), 1500px);
@@ -52,7 +52,7 @@
 <body>
 
 <div id="gameWrap">
-  <div id="title">SUPER PLUMBER BROS</div>
+  <div id="title">MISS MARIO IN HOTEL TRANSYLVANIA</div>
   <canvas id="game" width="800" height="480"></canvas>
   <div id="hint">Move: ← → / A D &nbsp;|&nbsp; Jump: Space / ↑ / W &nbsp;|&nbsp; Stomp Goombas from above!</div>
 </div>
@@ -202,21 +202,24 @@
   // fix mushroom that should sit on ground segment 3 (x 1860-2760)
   mushrooms[2] = { x: 2500, y: GROUND_Y - 24, taken: false };
 
-  function makeEnemy(x, y, patrolMin, patrolMax) {
+  function makeEnemy(x, y, patrolMin, patrolMax, kind) {
     return {
       x, y, w: 30, h: 28,
       vx: -ENEMY_SPEED, vy: 0,
       alive: true,
       patrolMin, patrolMax,
       squashT: 0, // squash-death animation timer
+      kind: kind || 'mushroom', // 'mushroom' | 'bat' | 'ghost'
+      baseY: y,
+      floatPhase: Math.random() * Math.PI * 2,
     };
   }
 
   const enemiesInit = () => ([
-    makeEnemy(500, GROUND_Y - 28, 350, 850),
-    makeEnemy(1150, 350 - 28, 1130, 1220), // on a platform
-    makeEnemy(2000, GROUND_Y - 28, 1900, 2700),
-    makeEnemy(2900, GROUND_Y - 28, 2860, 3300),
+    makeEnemy(500, GROUND_Y - 28, 350, 850, 'mushroom'),
+    makeEnemy(1150, 350 - 60, 1130, 1220, 'bat'), // flies above a platform
+    makeEnemy(2000, GROUND_Y - 28, 1900, 2700, 'ghost'),
+    makeEnemy(2900, GROUND_Y - 28, 2860, 3300, 'mushroom'),
   ]);
 
   const FLAG_X = LEVEL_WIDTH - 80;
@@ -403,13 +406,20 @@
         continue;
       }
 
-      en.vy += GRAVITY * dt;
-      en.vy = Math.min(MAX_FALL_SPEED, en.vy);
-      moveAndCollide(en, en.vx * dt, en.vy * dt);
+      if (en.kind === 'bat' || en.kind === 'ghost') {
+        // Flying enemies ignore gravity/solids and bob up and down as they patrol.
+        en.floatPhase += dt * (en.kind === 'bat' ? 5 : 1.8);
+        en.x += en.vx * dt;
+        en.y = en.baseY + Math.sin(en.floatPhase) * (en.kind === 'bat' ? 22 : 10);
+      } else {
+        en.vy += GRAVITY * dt;
+        en.vy = Math.min(MAX_FALL_SPEED, en.vy);
+        moveAndCollide(en, en.vx * dt, en.vy * dt);
+      }
 
       // Reverse at patrol bounds or when blocked by a wall
-      if (en.x <= en.patrolMin) { en.x = en.patrolMin; en.vx = ENEMY_SPEED; }
-      if (en.x + en.w >= en.patrolMax) { en.x = en.patrolMax - en.w; en.vx = -ENEMY_SPEED; }
+      if (en.x <= en.patrolMin) { en.x = en.patrolMin; en.vx = Math.abs(en.vx) || ENEMY_SPEED; }
+      if (en.x + en.w >= en.patrolMax) { en.x = en.patrolMax - en.w; en.vx = -(Math.abs(en.vx) || ENEMY_SPEED); }
     }
     // Drop fully-squashed enemies out of the array for tidiness
     for (let i = enemies.length - 1; i >= 0; i--) {
@@ -442,22 +452,22 @@
   // Drawing
   // ---------------------------------------------------------------------
   function drawBackground(t) {
-    // Night sky gradient (brightened for visibility, same moody hues)
+    // Castle-hall gradient: deep indigo stone fading to a violet haze low down
     const sky = ctx.createLinearGradient(0, 0, 0, VIEW_H);
-    sky.addColorStop(0, '#100e22');
-    sky.addColorStop(0.55, '#211a3c');
-    sky.addColorStop(1, '#392a52');
+    sky.addColorStop(0, '#140c24');
+    sky.addColorStop(0.5, '#241536');
+    sky.addColorStop(1, '#3d2350');
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
-    // Twinkling stars (slow parallax)
+    // Faint dust motes drifting in the hall (stand-in for stars)
     const starParallax = state.cameraX * 0.15;
     ctx.fillStyle = '#fff';
     for (const star of STARS) {
       const sx = star.x - starParallax;
       const wrapped = ((sx % (LEVEL_WIDTH + VIEW_W)) + (LEVEL_WIDTH + VIEW_W)) % (LEVEL_WIDTH + VIEW_W);
       if (wrapped > VIEW_W) continue;
-      const twinkle = 0.35 + Math.abs(Math.sin(t * 1.6 + star.phase)) * 0.65;
+      const twinkle = 0.15 + Math.abs(Math.sin(t * 1.6 + star.phase)) * 0.35;
       ctx.globalAlpha = twinkle;
       ctx.beginPath();
       ctx.arc(wrapped, star.y, star.r, 0, Math.PI * 2);
@@ -465,57 +475,159 @@
     }
     ctx.globalAlpha = 1;
 
-    // Pale, sickly moon with a soft glow
-    const moonParallax = state.cameraX * 0.08;
-    const moonX = VIEW_W * 0.78 - moonParallax % (VIEW_W * 1.4);
-    const moonY = 80;
-    const glow = ctx.createRadialGradient(moonX, moonY, 10, moonX, moonY, 140);
-    glow.addColorStop(0, 'rgba(226, 220, 180, 0.55)');
-    glow.addColorStop(1, 'rgba(226, 220, 180, 0)');
-    ctx.fillStyle = glow;
-    ctx.fillRect(moonX - 140, moonY - 140, 280, 280);
-    ctx.fillStyle = '#e6dfb8';
-    ctx.beginPath();
-    ctx.arc(moonX, moonY, 34, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = 'rgba(150, 140, 110, 0.4)';
-    ctx.beginPath();
-    ctx.arc(moonX - 10, moonY - 8, 6, 0, Math.PI * 2);
-    ctx.arc(moonX + 8, moonY + 10, 4, 0, Math.PI * 2);
-    ctx.arc(moonX + 12, moonY - 12, 3, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Dead silhouette hills with gnarled tree spikes
-    const parallax = state.cameraX * 0.3;
-    ctx.fillStyle = '#1c1730';
-    for (let i = -1; i < 6; i++) {
-      const hx = i * 260 - (parallax % 260);
-      ctx.beginPath();
-      ctx.arc(hx + 100, GROUND_Y + 20, 90, Math.PI, 0);
-      ctx.fill();
-      // bare twisted branches jutting from the hill crest
-      ctx.strokeStyle = '#0a0812';
-      ctx.lineWidth = 3;
-      for (let b = 0; b < 3; b++) {
-        const bx = hx + 40 + b * 30;
-        const by = GROUND_Y - 65;
-        ctx.beginPath();
-        ctx.moveTo(bx, by + 30);
-        ctx.lineTo(bx + 4, by);
-        ctx.lineTo(bx - 8, by - 14);
-        ctx.moveTo(bx + 4, by);
-        ctx.lineTo(bx + 12, by - 12);
-        ctx.stroke();
-      }
+    // Repeating tall gothic windows with the moon showing through the glass,
+    // a gargoyle perched on each stone ledge.
+    const winParallax = state.cameraX * 0.35;
+    const winSpacing = 420;
+    for (let i = -1; i < Math.ceil(VIEW_W / winSpacing) + 2; i++) {
+      const wx = i * winSpacing - (winParallax % winSpacing);
+      drawGothicWindow(wx, 40, t);
     }
 
-    // Drifting ground fog
+    // Distant brick wall texture band above the platforms
+    const parallax = state.cameraX * 0.3;
+    ctx.fillStyle = '#1e1430';
+    ctx.fillRect(0, GROUND_Y - 70, VIEW_W, 70);
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 1;
+    for (let bx = -((parallax) % 40); bx < VIEW_W; bx += 40) {
+      ctx.beginPath();
+      ctx.moveTo(bx, GROUND_Y - 70);
+      ctx.lineTo(bx, GROUND_Y);
+      ctx.stroke();
+    }
+
+    // Drifting purple ground fog
     const parallax2 = state.cameraX * 0.5;
-    ctx.fillStyle = 'rgba(200, 210, 220, 0.10)';
+    ctx.fillStyle = 'rgba(190, 120, 220, 0.10)';
     for (let i = -1; i < 8; i++) {
       const fx = i * 300 - (parallax2 % 300) + Math.sin(t * 0.3 + i) * 12;
       const fy = GROUND_Y - 30 - (i % 3) * 18;
       drawFogPatch(fx, fy);
+    }
+  }
+
+  function drawGothicWindow(x, y, t) {
+    const w = 130, h = 230;
+    // stone frame
+    ctx.fillStyle = '#241a32';
+    ctx.beginPath();
+    ctx.moveTo(x, y + h);
+    ctx.lineTo(x, y + 40);
+    ctx.quadraticCurveTo(x, y, x + w / 2, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + 40);
+    ctx.lineTo(x + w, y + h);
+    ctx.closePath();
+    ctx.fill();
+
+    // glass pane (inset)
+    const inset = 10;
+    const gx = x + inset, gy = y + 34, gw = w - inset * 2, gh = h - 34 - inset;
+    const glass = ctx.createLinearGradient(0, gy, 0, gy + gh);
+    glass.addColorStop(0, '#241238');
+    glass.addColorStop(1, '#3a1c46');
+    ctx.fillStyle = glass;
+    ctx.beginPath();
+    ctx.moveTo(gx, gy + gh);
+    ctx.lineTo(gx, gy + 24);
+    ctx.quadraticCurveTo(gx, gy - 10, gx + gw / 2, gy - 10);
+    ctx.quadraticCurveTo(gx + gw, gy - 10, gx + gw, gy + 24);
+    ctx.lineTo(gx + gw, gy + gh);
+    ctx.closePath();
+    ctx.fill();
+
+    // moon glimpsed through the glass
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = 'rgba(226, 220, 190, 0.85)';
+    ctx.beginPath();
+    ctx.arc(gx + gw / 2, gy + 46, 30, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // mullions
+    ctx.strokeStyle = 'rgba(20, 12, 30, 0.8)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x + w / 2, y + 4);
+    ctx.lineTo(x + w / 2, y + h);
+    ctx.moveTo(gx, gy + gh * 0.6);
+    ctx.lineTo(gx + gw, gy + gh * 0.6);
+    ctx.stroke();
+
+    // gargoyle silhouette perched on the ledge
+    drawGargoyle(x + w / 2, y + h - 6, t);
+  }
+
+  function drawGargoyle(cx, groundY, t) {
+    const bob = Math.sin(t * 0.6 + cx) * 1.5;
+    const y = groundY + bob;
+    ctx.fillStyle = '#352745';
+    // wings
+    ctx.beginPath();
+    ctx.moveTo(cx - 4, y - 18);
+    ctx.lineTo(cx - 26, y - 6);
+    ctx.lineTo(cx - 6, y - 4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(cx + 4, y - 18);
+    ctx.lineTo(cx + 26, y - 6);
+    ctx.lineTo(cx + 6, y - 4);
+    ctx.closePath();
+    ctx.fill();
+    // crouched body
+    ctx.beginPath();
+    ctx.ellipse(cx, y - 6, 11, 14, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // ears/horns
+    ctx.beginPath();
+    ctx.moveTo(cx - 6, y - 18);
+    ctx.lineTo(cx - 8, y - 26);
+    ctx.lineTo(cx - 3, y - 18);
+    ctx.moveTo(cx + 6, y - 18);
+    ctx.lineTo(cx + 8, y - 26);
+    ctx.lineTo(cx + 3, y - 18);
+    ctx.closePath();
+    ctx.fill();
+    // eyes
+    ctx.fillStyle = '#ff2a2a';
+    ctx.beginPath();
+    ctx.arc(cx - 3, y - 12, 1.4, 0, Math.PI * 2);
+    ctx.arc(cx + 3, y - 12, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawSlimePool(t) {
+    // Glowing purple ooze filling the pit gaps below the platforms.
+    // Drawn before the platforms so solid ground/floor tiles paint over it
+    // wherever the level actually has floor, leaving only the pits lethal.
+    const poolY = KILL_Y - 30;
+    const grad = ctx.createLinearGradient(0, poolY, 0, VIEW_H);
+    grad.addColorStop(0, 'rgba(190, 60, 230, 0.9)');
+    grad.addColorStop(1, 'rgba(90, 20, 120, 0.95)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, poolY, VIEW_W, VIEW_H - poolY);
+
+    ctx.strokeStyle = 'rgba(230, 160, 255, 0.8)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    for (let x = 0; x <= VIEW_W; x += 20) {
+      const wob = Math.sin(t * 3 + x * 0.05) * 4;
+      if (x === 0) ctx.moveTo(x, poolY + wob);
+      else ctx.lineTo(x, poolY + wob);
+    }
+    ctx.stroke();
+
+    // rising bubbles
+    ctx.fillStyle = 'rgba(230, 180, 255, 0.7)';
+    for (let i = 0; i < 14; i++) {
+      const bx = (i * 97 + (t * 30) % 97 * 3) % VIEW_W;
+      const by = poolY + 20 + ((i * 53 + t * 40) % (VIEW_H - poolY - 20));
+      const r = 2 + (i % 3);
+      ctx.beginPath();
+      ctx.arc(bx, by, r, 0, Math.PI * 2);
+      ctx.fill();
     }
   }
 
@@ -533,10 +645,10 @@
       if (sx + s.w < 0 || sx > VIEW_W) continue;
 
       const isGround = s.y === GROUND_Y;
-      ctx.fillStyle = isGround ? '#3a2b30' : '#4d3453';
+      ctx.fillStyle = isGround ? '#453452' : '#523a5e';
       ctx.fillRect(sx, s.y, s.w, s.h);
-      // top highlight strip: dead moss / dried blood tint
-      ctx.fillStyle = isGround ? '#4a4028' : '#733a4a';
+      // top highlight strip: worn stone / mortar tint
+      ctx.fillStyle = isGround ? '#6b5a80' : '#7a4f8a';
       ctx.fillRect(sx, s.y, s.w, 8);
       // cracked texture
       ctx.strokeStyle = 'rgba(0,0,0,0.4)';
@@ -579,27 +691,27 @@
       const mx = m.x - state.cameraX;
       if (mx < -24 || mx > VIEW_W + 24) continue;
       // stem
-      ctx.fillStyle = '#cbb896';
+      ctx.fillStyle = '#f5e9d8';
       ctx.fillRect(mx - 7, m.y, 14, 12);
-      // cap
-      ctx.fillStyle = '#4a1030';
+      // cap: cheerful candy-pink power mushroom
+      ctx.shadowColor = '#ff4fa0';
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = '#ff4fa0';
       ctx.beginPath();
       ctx.arc(mx, m.y, 13, Math.PI, 0);
       ctx.fill();
-      // glowing spores
-      ctx.shadowColor = '#b98cff';
-      ctx.shadowBlur = 8;
-      ctx.fillStyle = '#d9b8ff';
+      ctx.shadowBlur = 0;
+      // white spots
+      ctx.fillStyle = '#fff';
       ctx.beginPath();
       ctx.arc(mx - 6, m.y - 5, 3, 0, Math.PI * 2);
       ctx.arc(mx + 6, m.y - 5, 3, 0, Math.PI * 2);
       ctx.arc(mx, m.y - 10, 2.5, 0, Math.PI * 2);
       ctx.fill();
-      ctx.shadowBlur = 0;
     }
   }
 
-  function drawEnemies() {
+  function drawEnemies(t) {
     for (const en of enemies) {
       const ex = en.x - state.cameraX;
       if (ex + en.w < 0 || ex > VIEW_W) continue;
@@ -612,52 +724,128 @@
         ctx.translate(-ex, -(en.y + en.h));
       }
 
-      // body: matte black shadow-creature silhouette
-      ctx.fillStyle = '#0c0810';
-      ctx.beginPath();
-      ctx.ellipse(ex + en.w / 2, en.y + en.h / 2 + 2, en.w / 2, en.h / 2, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      // jagged spikes along its back
-      ctx.fillStyle = '#0c0810';
-      for (let sp = 0; sp < 3; sp++) {
-        const spx = ex + 6 + sp * 9;
-        ctx.beginPath();
-        ctx.moveTo(spx, en.y + 4);
-        ctx.lineTo(spx + 4, en.y - 6);
-        ctx.lineTo(spx + 8, en.y + 4);
-        ctx.closePath();
-        ctx.fill();
-      }
-
-      // clawed feet
-      ctx.fillStyle = '#050308';
-      ctx.fillRect(ex + 2, en.y + en.h - 6, 8, 6);
-      ctx.fillRect(ex + en.w - 10, en.y + en.h - 6, 8, 6);
-
-      // sharp teeth
-      ctx.fillStyle = '#e8e2ea';
-      ctx.beginPath();
-      ctx.moveTo(ex + en.w / 2 - 8, en.y + en.h / 2 + 6);
-      ctx.lineTo(ex + en.w / 2 - 4, en.y + en.h / 2 + 12);
-      ctx.lineTo(ex + en.w / 2, en.y + en.h / 2 + 6);
-      ctx.lineTo(ex + en.w / 2 + 4, en.y + en.h / 2 + 12);
-      ctx.lineTo(ex + en.w / 2 + 8, en.y + en.h / 2 + 6);
-      ctx.closePath();
-      ctx.fill();
-
-      // glowing red eyes
-      ctx.shadowColor = '#ff2a2a';
-      ctx.shadowBlur = 10;
-      ctx.fillStyle = '#ff2a2a';
-      ctx.beginPath();
-      ctx.arc(ex + en.w / 2 - 6, en.y + en.h / 2 - 2, 3.5, 0, Math.PI * 2);
-      ctx.arc(ex + en.w / 2 + 6, en.y + en.h / 2 - 2, 3.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
+      if (en.kind === 'bat') drawBatEnemy(ex, en, t);
+      else if (en.kind === 'ghost') drawGhostEnemy(ex, en, t);
+      else drawMushroomEnemy(ex, en, t);
 
       ctx.restore();
     }
+  }
+
+  function drawMushroomEnemy(ex, en, t) {
+    const cx = ex + en.w / 2, top = en.y, h = en.h, w = en.w;
+    // stem/legs
+    ctx.fillStyle = '#d8c9e0';
+    ctx.fillRect(ex + 6, top + h - 12, w - 12, 12);
+    ctx.fillStyle = '#2a1032';
+    ctx.fillRect(ex + 4, top + h - 6, 8, 6);
+    ctx.fillRect(ex + w - 12, top + h - 6, 8, 6);
+
+    // angry spotted cap
+    ctx.fillStyle = '#6a2d8f';
+    ctx.beginPath();
+    ctx.arc(cx, top + h * 0.42, w / 2, Math.PI, 0);
+    ctx.fill();
+    ctx.fillStyle = '#ff2a2a';
+    ctx.beginPath();
+    ctx.arc(cx - 8, top + 8, 3, 0, Math.PI * 2);
+    ctx.arc(cx + 7, top + 6, 2.5, 0, Math.PI * 2);
+    ctx.arc(cx, top + 12, 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // scowling eyes
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(cx - 6, top + h * 0.5, 3.5, 0, Math.PI * 2);
+    ctx.arc(cx + 6, top + h * 0.5, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#1a0a20';
+    ctx.beginPath();
+    ctx.arc(cx - 6, top + h * 0.5, 1.6, 0, Math.PI * 2);
+    ctx.arc(cx + 6, top + h * 0.5, 1.6, 0, Math.PI * 2);
+    ctx.fill();
+
+    // fangs
+    ctx.fillStyle = '#f2ecf5';
+    ctx.beginPath();
+    ctx.moveTo(cx - 4, top + h * 0.62);
+    ctx.lineTo(cx - 1, top + h * 0.75);
+    ctx.lineTo(cx + 2, top + h * 0.62);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawBatEnemy(ex, en, t) {
+    const cx = ex + en.w / 2, cy = en.y + en.h / 2;
+    const flap = Math.sin(t * 14) * 10;
+    ctx.fillStyle = '#170a22';
+    // wings
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.quadraticCurveTo(cx - 14, cy - 10 - flap, cx - 22, cy + 2);
+    ctx.quadraticCurveTo(cx - 12, cy + 2, cx, cy + 6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.quadraticCurveTo(cx + 14, cy - 10 - flap, cx + 22, cy + 2);
+    ctx.quadraticCurveTo(cx + 12, cy + 2, cx, cy + 6);
+    ctx.closePath();
+    ctx.fill();
+    // body
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 7, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // ears
+    ctx.beginPath();
+    ctx.moveTo(cx - 5, cy - 7);
+    ctx.lineTo(cx - 6, cy - 13);
+    ctx.lineTo(cx - 2, cy - 8);
+    ctx.moveTo(cx + 5, cy - 7);
+    ctx.lineTo(cx + 6, cy - 13);
+    ctx.lineTo(cx + 2, cy - 8);
+    ctx.closePath();
+    ctx.fill();
+    // glowing eyes
+    ctx.shadowColor = '#ff2a2a';
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = '#ff2a2a';
+    ctx.beginPath();
+    ctx.arc(cx - 2.5, cy - 1, 1.6, 0, Math.PI * 2);
+    ctx.arc(cx + 2.5, cy - 1, 1.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
+  function drawGhostEnemy(ex, en, t) {
+    const cx = ex + en.w / 2, top = en.y, w = en.w, h = en.h;
+    // flowing hooded robe
+    ctx.fillStyle = '#1c1428';
+    ctx.beginPath();
+    ctx.moveTo(cx - w / 2, top + h);
+    ctx.quadraticCurveTo(cx - w / 2 - 4, top + h * 0.4, cx, top);
+    ctx.quadraticCurveTo(cx + w / 2 + 4, top + h * 0.4, cx + w / 2, top + h);
+    const wob = Math.sin(t * 3 + cx) * 3;
+    ctx.quadraticCurveTo(cx + w / 4, top + h - 6 + wob, cx, top + h - 2);
+    ctx.quadraticCurveTo(cx - w / 4, top + h - 6 - wob, cx - w / 2, top + h);
+    ctx.closePath();
+    ctx.fill();
+
+    // hood shadow / void face
+    ctx.fillStyle = '#0a0612';
+    ctx.beginPath();
+    ctx.ellipse(cx, top + h * 0.38, w * 0.28, h * 0.26, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // glowing red eyes
+    ctx.shadowColor = '#ff2a2a';
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = '#ff2a2a';
+    ctx.beginPath();
+    ctx.arc(cx - 5, top + h * 0.38, 2.4, 0, Math.PI * 2);
+    ctx.arc(cx + 5, top + h * 0.38, 2.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
   }
 
   function drawFlag() {
@@ -688,15 +876,18 @@
     ctx.scale(p.facing, 1);
     ctx.translate(-p.w / 2, 0);
 
-    // Legs: dark stockings + boots
-    ctx.fillStyle = '#1c1620';
+    // Legs: white stockings + red boots
+    ctx.fillStyle = '#f0ecf5';
     ctx.fillRect(4, p.y + 26, 20, 14);
-    ctx.fillStyle = '#0c0810';
-    ctx.fillRect(3, p.y + 36, 10, 5);
-    ctx.fillRect(15, p.y + 36, 10, 5);
+    ctx.fillStyle = '#c81e3a';
+    ctx.fillRect(3, p.y + 35, 10, 6);
+    ctx.fillRect(15, p.y + 35, 10, 6);
+    ctx.fillStyle = '#8f1029';
+    ctx.fillRect(3, p.y + 39, 10, 2);
+    ctx.fillRect(15, p.y + 39, 10, 2);
 
-    // Flared skirt (dark maroon), drawn as a trapezoid
-    ctx.fillStyle = '#5c1030';
+    // Flared purple dress, drawn as a trapezoid
+    ctx.fillStyle = '#6a2d8f';
     ctx.beginPath();
     ctx.moveTo(6, p.y + 14);
     ctx.lineTo(22, p.y + 14);
@@ -704,13 +895,21 @@
     ctx.lineTo(2, p.y + 30);
     ctx.closePath();
     ctx.fill();
+    ctx.fillStyle = '#4a1f66';
+    ctx.fillRect(2, p.y + 27, 24, 3);
 
-    // Blouse
-    ctx.fillStyle = '#e7e1ea';
+    // White blouse collar
+    ctx.fillStyle = '#f0ecf5';
     ctx.fillRect(4, p.y + 12, 20, 6);
 
-    // Long dark hair falling behind the head/shoulders
-    ctx.fillStyle = '#140d18';
+    // White glove peeking at the side
+    ctx.fillStyle = '#fdfbff';
+    ctx.beginPath();
+    ctx.arc(1, p.y + 20, 4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Auburn hair falling behind the head/shoulders
+    ctx.fillStyle = '#7a3a26';
     ctx.beginPath();
     ctx.moveTo(3, p.y - 2);
     ctx.quadraticCurveTo(-3, p.y + 20, 2, p.y + 34);
@@ -730,44 +929,135 @@
     ctx.fillStyle = '#f0c9a0';
     ctx.fillRect(6, p.y, 16, 14);
 
-    // Hair top + bangs
-    ctx.fillStyle = '#140d18';
-    ctx.fillRect(4, p.y - 4, 20, 7);
+    // Auburn bangs
+    ctx.fillStyle = '#7a3a26';
     ctx.fillRect(6, p.y, 5, 5);
     ctx.fillRect(17, p.y, 5, 5);
 
-    // Small bow
-    ctx.fillStyle = '#8f2d56';
+    // Purple cap with a red "M" badge
+    ctx.fillStyle = '#5a2380';
     ctx.beginPath();
-    ctx.arc(24, p.y - 2, 3.2, 0, Math.PI * 2);
-    ctx.arc(24, p.y + 4, 3.2, 0, Math.PI * 2);
+    ctx.moveTo(3, p.y - 1);
+    ctx.quadraticCurveTo(14, p.y - 12, 25, p.y - 1);
+    ctx.lineTo(25, p.y + 2);
+    ctx.lineTo(3, p.y + 2);
+    ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = '#5c1030';
-    ctx.fillRect(22.5, p.y - 0.5, 3, 3);
+    ctx.fillStyle = '#3a1658';
+    ctx.fillRect(20, p.y - 3, 8, 4);
+    ctx.fillStyle = '#c81e3a';
+    ctx.beginPath();
+    ctx.arc(14, p.y - 5, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 6px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('M', 14, p.y - 3);
+    ctx.textAlign = 'left';
 
-    // Eye, given a faint glow for an eerie touch at night
-    ctx.shadowColor = '#8f2d56';
-    ctx.shadowBlur = 4;
-    ctx.fillStyle = '#2a1030';
+    // Blue eye, friendly (no glow)
+    ctx.fillStyle = '#2a4d8f';
     ctx.fillRect(16, p.y + 4, 3, 4);
-    ctx.shadowBlur = 0;
 
     ctx.restore();
   }
 
-  function drawHUD() {
-    ctx.fillStyle = 'rgba(0,0,0,0.35)';
-    ctx.fillRect(0, 0, VIEW_W, 40);
+  function drawHeart(x, y, size, filled) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(size / 10, size / 10);
+    ctx.beginPath();
+    ctx.moveTo(0, 3);
+    ctx.bezierCurveTo(0, 0, -5, -2, -5, 2);
+    ctx.bezierCurveTo(-5, 5, -2, 7, 0, 9);
+    ctx.bezierCurveTo(2, 7, 5, 5, 5, 2);
+    ctx.bezierCurveTo(5, -2, 0, 0, 0, 3);
+    ctx.closePath();
+    if (filled) {
+      ctx.fillStyle = '#e0233f';
+      ctx.fill();
+    } else {
+      ctx.strokeStyle = 'rgba(224, 35, 63, 0.6)';
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
 
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 20px monospace';
+  function drawCoinIcon(x, y, r) {
+    ctx.fillStyle = '#ffd23f';
+    ctx.strokeStyle = '#a8790a';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#a8790a';
+    ctx.font = `bold ${r}px monospace`;
+    ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('SCORE: ' + state.score, 16, 22);
+    ctx.fillText('G', x, y + 1);
+  }
 
-    ctx.fillText('LIVES: ' + '❤ '.repeat(Math.max(0, state.lives)).trim(), 260, 22);
+  function drawHUD() {
+    ctx.textBaseline = 'middle';
 
+    // Hearts (top-left) — filled for remaining lives, outlined for the rest
+    const MAX_LIVES = 3;
+    for (let i = 0; i < MAX_LIVES; i++) {
+      drawHeart(20 + i * 22, 22, 16, i < state.lives);
+    }
+
+    // Coin count, next to the hearts
+    drawCoinIcon(108, 22, 10);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 16px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(state.score + ' G', 124, 23);
+
+    // Progress, small, top-center
     const pct = Math.round(Math.min(100, (player.x / (FLAG_X)) * 100));
-    ctx.fillText('PROGRESS: ' + pct + '%', VIEW_W - 220, 22);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.font = 'bold 13px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(pct + '%', VIEW_W / 2, 22);
+
+    // Portrait nameplate (top-right)
+    const boxW = 150, boxH = 34, boxX = VIEW_W - boxW - 14, boxY = 8;
+    ctx.fillStyle = 'rgba(15, 6, 22, 0.6)';
+    ctx.strokeStyle = 'rgba(255, 111, 168, 0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(boxX, boxY, boxW, boxH, 6);
+    else ctx.rect(boxX, boxY, boxW, boxH);
+    ctx.fill();
+    ctx.stroke();
+
+    // mini portrait
+    const pcx = boxX + 18, pcy = boxY + boxH / 2;
+    ctx.fillStyle = '#f0c9a0';
+    ctx.beginPath();
+    ctx.arc(pcx, pcy + 2, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#5a2380';
+    ctx.beginPath();
+    ctx.moveTo(pcx - 9, pcy - 2);
+    ctx.quadraticCurveTo(pcx, pcy - 14, pcx + 9, pcy - 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#c81e3a';
+    ctx.beginPath();
+    ctx.arc(pcx, pcy - 5, 3, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#ff9fc4';
+    ctx.font = 'bold 9px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('MISS', boxX + 34, boxY + 12);
+    ctx.fillStyle = '#fff';
+    ctx.fillText('MARIO', boxX + 34, boxY + 24);
+
+    ctx.textAlign = 'left';
   }
 
   function drawOverlay() {
@@ -812,11 +1102,12 @@
 
   function draw(t) {
     drawBackground(t);
+    drawSlimePool(t);
     drawSolids();
     drawMushrooms();
     drawCoins(t);
     drawFlag();
-    drawEnemies();
+    drawEnemies(t);
     drawPlayer();
     drawVignette(t);
     drawHUD();
