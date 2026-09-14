@@ -59,9 +59,9 @@
 <body>
 
 <div id="gameWrap">
-  <div id="title">MISS MARIO IN HOTEL TRANSYLVANIA</div>
+  <div id="title">MISS MARIO IN HOTEL TRANSYLVANIA &mdash; 10 LEVELS</div>
   <canvas id="game" width="800" height="480"></canvas>
-  <div id="hint">Move: ← → / A D &nbsp;|&nbsp; Jump: Space / ↑ / W &nbsp;|&nbsp; Stomp Goombas from above!</div>
+  <div id="hint">Move: ← → / A D &nbsp;|&nbsp; Jump: Space / ↑ / W &nbsp;|&nbsp; Stomp Goombas from above! &nbsp;|&nbsp; 10 levels, Easy → Extreme</div>
 </div>
 
 <script>
@@ -162,9 +162,15 @@
   const ENEMY_SPEED = 80;
   const INVULN_TIME = 1.5;       // seconds of flashing invulnerability after a hit
 
-  const LEVEL_WIDTH = 3400;
+  let LEVEL_WIDTH = 2200;        // recomputed per level by buildLevel()
   const GROUND_Y = 440;          // top surface of ground tiles
   const KILL_Y = 620;            // fall past this = death (pit)
+
+  const LEVEL_COUNT = 10;
+  const DIFFICULTY_NAMES = [
+    'Very Easy', 'Easy', 'Easy', 'Medium', 'Medium',
+    'Hard', 'Hard', 'Very Hard', 'Very Hard', 'Extreme',
+  ];
 
   // ---------------------------------------------------------------------
   // Input handling
@@ -185,7 +191,7 @@
       if (!jumpKeyDown) jumpEdge = true;
       jumpKeyDown = true;
     }
-    if (state.mode !== 'playing' && (e.key === 'Enter' || e.key === ' ')) resetGame();
+    if ((state.mode === 'gameover' || state.mode === 'victory') && (e.key === 'Enter' || e.key === ' ')) resetGame();
   });
   window.addEventListener('keyup', (e) => {
     keys[e.key] = false;
@@ -199,58 +205,10 @@
   // ---------------------------------------------------------------------
   function rect(x, y, w, h) { return { x, y, w, h }; }
 
-  const solids = [
-    // Ground segments, broken up by two pits for a bit of risk/reward
-    rect(0, GROUND_Y, 900, 40),
-    rect(980, GROUND_Y, 820, 40),
-    rect(1860, GROUND_Y, 900, 40),
-    rect(2820, GROUND_Y, LEVEL_WIDTH - 2820, 40),
-
-    // Floating platforms
-    rect(300, 330, 120, 24),
-    rect(520, 260, 100, 24),
-    rect(760, 340, 140, 24),
-    rect(1120, 350, 110, 24),
-    rect(1300, 260, 90, 24),
-    rect(1550, 320, 130, 24),
-    rect(2000, 340, 120, 24),
-    rect(2200, 260, 100, 24),
-    rect(2420, 350, 140, 24),
-    rect(2680, 300, 100, 24),
-    rect(2980, 340, 140, 24),
-    rect(3150, 250, 120, 24),
-  ];
-
-  const coins = [
-    { x: 340, y: 290, taken: false },
-    { x: 560, y: 220, taken: false },
-    { x: 800, y: 300, taken: false },
-    { x: 840, y: 300, taken: false },
-    { x: 1150, y: 310, taken: false },
-    { x: 1330, y: 220, taken: false },
-    { x: 1590, y: 280, taken: false },
-    { x: 1630, y: 280, taken: false },
-    { x: 2030, y: 300, taken: false },
-    { x: 2230, y: 220, taken: false },
-    { x: 2450, y: 310, taken: false },
-    { x: 2710, y: 260, taken: false },
-    { x: 3010, y: 300, taken: false },
-    { x: 3180, y: 210, taken: false },
-  ];
-
-  const mushrooms = [
-    { x: 500, y: GROUND_Y - 24, taken: false },
-    { x: 1600, y: 290, taken: false },
-    { x: 2450, y: GROUND_Y - 24 - 300 + 300, taken: false }, // sits on ground segment
-    { x: 3000, y: 310, taken: false },
-  ];
-  // fix mushroom that should sit on ground segment 3 (x 1860-2760)
-  mushrooms[2] = { x: 2500, y: GROUND_Y - 24, taken: false };
-
-  function makeEnemy(x, y, patrolMin, patrolMax, kind) {
+  function makeEnemy(x, y, patrolMin, patrolMax, kind, speed) {
     return {
       x, y, w: 30, h: 28,
-      vx: -ENEMY_SPEED, vy: 0,
+      vx: -(speed || ENEMY_SPEED), vy: 0,
       alive: true,
       patrolMin, patrolMax,
       squashT: 0, // squash-death animation timer
@@ -260,24 +218,120 @@
     };
   }
 
-  const enemiesInit = () => ([
-    makeEnemy(500, GROUND_Y - 28, 350, 850, 'mushroom'),
-    makeEnemy(1150, 350 - 60, 1130, 1220, 'bat'), // flies above a platform
-    makeEnemy(2000, GROUND_Y - 28, 1900, 2700, 'ghost'),
-    makeEnemy(2900, GROUND_Y - 28, 2860, 3300, 'mushroom'),
-  ]);
+  // Deterministic PRNG so every playthrough of "Level 6" looks the same.
+  function mulberry32(seed) {
+    return function () {
+      seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+      let r = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
+      return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+    };
+  }
 
-  const FLAG_X = LEVEL_WIDTH - 80;
+  // Builds one of the 10 levels. idx is 0-based (0 = level 1, easiest;
+  // 9 = level 10, hardest). Difficulty t (0..1) scales level length, pit
+  // count/width, platform and enemy density, and enemy speed.
+  function buildLevel(idx) {
+    const rand = mulberry32(2026 + idx * 733);
+    const t = idx / (LEVEL_COUNT - 1);
 
-  // ---------------------------------------------------------------------
-  // Night sky decoration (fixed field, twinkles over time)
-  // ---------------------------------------------------------------------
-  const STARS = Array.from({ length: 90 }, (_, i) => ({
-    x: (i * 137) % (LEVEL_WIDTH + VIEW_W),
-    y: (i * 53) % (GROUND_Y - 60) + 10,
-    r: 1 + (i % 3) * 0.6,
-    phase: i * 0.6,
-  }));
+    const width = Math.round(2200 + t * 2000);
+    const pitCount = Math.min(1 + Math.floor(idx / 2), 5);
+    const minSeg = 380, maxSeg = 650;
+    const gapMin = 55 + t * 30;
+    const gapMax = Math.min(85 + t * 70, 140); // stays jumpable at max speed
+    const endReserve = 420;
+
+    // Ground segments separated by pit gaps
+    const segments = [];
+    let x = 0;
+    while (x < width - endReserve && segments.length < pitCount + 1) {
+      const segW = minSeg + rand() * (maxSeg - minSeg);
+      segments.push({ x, w: segW });
+      x += segW;
+      if (segments.length <= pitCount) x += gapMin + rand() * (gapMax - gapMin);
+    }
+    segments.push({ x, w: Math.max(200, width - x) });
+
+    const solids = segments.map(s => rect(s.x, GROUND_Y, s.w, 40));
+
+    function pickGroundSeg(minW) {
+      const pool = segments.filter(s => s.w >= minW);
+      return pool.length ? pool[Math.floor(rand() * pool.length)] : segments[0];
+    }
+
+    // Floating platforms, with a coin above most of them
+    const coins = [];
+    const platCount = 8 + Math.floor(t * 10);
+    for (let i = 0; i < platCount; i++) {
+      const px = 250 + rand() * (width - 500);
+      const py = 230 + rand() * 150;
+      const pw = 90 + rand() * 70;
+      solids.push(rect(px, py, pw, 24));
+      if (rand() < 0.7) coins.push({ x: px + pw / 2, y: py - 40, taken: false });
+    }
+
+    // Ground-level coins, kept over solid ground for a clean pickup arc
+    const groundCoinCount = 6 + Math.floor(t * 6);
+    for (let i = 0; i < groundCoinCount; i++) {
+      const seg = pickGroundSeg(150);
+      const cx = seg.x + 40 + rand() * Math.max(1, seg.w - 80);
+      coins.push({ x: cx, y: GROUND_Y - 60 - rand() * 40, taken: false });
+    }
+
+    // Power mushrooms
+    const mushrooms = [];
+    const mushroomCount = 2 + Math.floor(t * 2);
+    for (let i = 0; i < mushroomCount; i++) {
+      const seg = pickGroundSeg(150);
+      const mx = seg.x + 50 + rand() * Math.max(1, seg.w - 100);
+      mushrooms.push({ x: mx, y: GROUND_Y - 24, taken: false });
+    }
+
+    // Enemies: ground mushrooms patrol within one ground segment; bats/ghosts
+    // fly freely (including over pits) and get more common at higher levels.
+    const enemies = [];
+    const enemyCount = 2 + Math.floor(t * 8);
+    const speedMul = 1 + t * 0.6;
+    for (let i = 0; i < enemyCount; i++) {
+      const roll = rand();
+      const kind = t < 0.25 ? 'mushroom' : (roll < 0.4 ? 'mushroom' : roll < 0.7 ? 'bat' : 'ghost');
+      if (kind === 'mushroom') {
+        const seg = pickGroundSeg(220);
+        // Keep the segment that holds the fixed player spawn (x=60) clear.
+        const pMin = seg.x === 0 ? 170 : seg.x + 20;
+        const pMax = seg.x + seg.w - 20 - 30;
+        if (pMax <= pMin) continue;
+        const ex = pMin + rand() * (pMax - pMin);
+        enemies.push(makeEnemy(ex, GROUND_Y - 28, pMin, pMax, 'mushroom', ENEMY_SPEED * speedMul));
+      } else {
+        const pMin = 350 + rand() * (width - 900);
+        const pMax = pMin + 150 + rand() * 280;
+        const ex = pMin + (pMax - pMin) / 2;
+        const baseY = kind === 'bat' ? 150 + rand() * 140 : GROUND_Y - 40 - rand() * 130;
+        enemies.push(makeEnemy(ex, baseY, pMin, pMax, kind, ENEMY_SPEED * speedMul * 0.9));
+      }
+    }
+
+    return { width, solids, coins, mushrooms, enemies, flagX: width - 80 };
+  }
+
+  // Night sky decoration (fixed field, twinkles over time), rebuilt per level
+  function buildStars(width) {
+    return Array.from({ length: 90 }, (_, i) => ({
+      x: (i * 137) % (width + VIEW_W),
+      y: (i * 53) % (GROUND_Y - 60) + 10,
+      r: 1 + (i % 3) * 0.6,
+      phase: i * 0.6,
+    }));
+  }
+
+  let solids = [];
+  let coins = [];
+  let mushrooms = [];
+  let enemies = [];
+  let FLAG_X = 0;
+  let STARS = [];
 
   // ---------------------------------------------------------------------
   // Player
@@ -289,7 +343,7 @@
       vx: 0, vy: 0,
       onGround: false,
       facing: 1,
-      invuln: 0,
+      invuln: 1.0, // brief grace period so a spawn-point enemy can't chain-kill
       jumpsUsed: 0,
     };
   }
@@ -298,29 +352,45 @@
   // Game state
   // ---------------------------------------------------------------------
   const state = {
-    mode: 'playing', // 'playing' | 'gameover' | 'victory'
+    mode: 'playing', // 'playing' | 'levelcomplete' | 'gameover' | 'victory'
     score: 0,
     lives: 3,
     cameraX: 0,
     scoreSubmitted: false,
     leaderboard: [],
+    currentLevel: 0,       // 0-based; level shown to the player is currentLevel + 1
+    levelCompleteTimer: 0,
   };
 
   let player = makePlayer();
-  let enemies = enemiesInit();
+
+  // Loads level `idx` (0-based): rebuilds its geometry/enemies/coins and
+  // drops the player at its start. Score and lives carry over across levels.
+  function loadLevel(idx) {
+    state.currentLevel = idx;
+    const built = buildLevel(idx);
+    solids = built.solids;
+    coins = built.coins;
+    mushrooms = built.mushrooms;
+    enemies = built.enemies;
+    FLAG_X = built.flagX;
+    LEVEL_WIDTH = built.width;
+    STARS = buildStars(LEVEL_WIDTH);
+    player = makePlayer();
+    state.cameraX = 0;
+  }
 
   function resetGame() {
-    player = makePlayer();
-    enemies = enemiesInit();
-    coins.forEach(c => c.taken = false);
-    mushrooms.forEach(m => m.taken = false);
     state.mode = 'playing';
     state.score = 0;
     state.lives = 3;
-    state.cameraX = 0;
     state.scoreSubmitted = false;
     state.leaderboard = [];
+    state.levelCompleteTimer = 0;
+    loadLevel(0);
   }
+
+  loadLevel(0);
 
   function respawnAfterDeath() {
     state.lives--;
@@ -329,6 +399,7 @@
       return;
     }
     player = makePlayer();
+    state.cameraX = 0;
   }
 
   // ---------------------------------------------------------------------
@@ -448,9 +519,15 @@
       }
     }
 
-    // --- Flag / victory ---
+    // --- Flag: advance to the next level, or win the game on the last one ---
     if (p.x + p.w >= FLAG_X) {
-      state.mode = 'victory';
+      if (state.currentLevel >= LEVEL_COUNT - 1) {
+        state.mode = 'victory';
+      } else {
+        state.score += 300 + state.currentLevel * 100; // level-clear bonus
+        state.mode = 'levelcomplete';
+        state.levelCompleteTimer = 1.6;
+      }
     }
   }
 
@@ -490,12 +567,22 @@
   }
 
   function update(dt) {
+    if (state.mode === 'levelcomplete') {
+      state.levelCompleteTimer -= dt;
+      if (state.levelCompleteTimer <= 0) {
+        loadLevel(state.currentLevel + 1);
+        state.mode = 'playing';
+      }
+      return;
+    }
     if (state.mode !== 'playing') return;
     updatePlayer(dt);
     if (state.mode !== 'playing') {
-      if (!state.scoreSubmitted) {
-        state.scoreSubmitted = true;
-        finishGame();
+      if (state.mode === 'gameover' || state.mode === 'victory') {
+        if (!state.scoreSubmitted) {
+          state.scoreSubmitted = true;
+          finishGame();
+        }
       }
       return;
     }
@@ -506,12 +593,32 @@
   // ---------------------------------------------------------------------
   // Drawing
   // ---------------------------------------------------------------------
+  // Mixes two "#rrggbb" colors; t=0 is colorA, t=1 is colorB.
+  function lerpColor(colorA, colorB, t) {
+    const a = parseInt(colorA.slice(1), 16), b = parseInt(colorB.slice(1), 16);
+    const r = Math.round(((a >> 16) & 255) + (((b >> 16) & 255) - ((a >> 16) & 255)) * t);
+    const g = Math.round(((a >> 8) & 255) + (((b >> 8) & 255) - ((a >> 8) & 255)) * t);
+    const bl = Math.round((a & 255) + ((b & 255) - (a & 255)) * t);
+    return `rgb(${r}, ${g}, ${bl})`;
+  }
+
+  // 0 at level 1 (calm) -> 1 at level 10 (dangerous); used to redden the
+  // whole scene as the run gets harder, so each level visibly escalates.
+  function levelDanger() { return state.currentLevel / (LEVEL_COUNT - 1); }
+
+  function lerpRgba(colorA, colorB, t, alpha) {
+    return lerpColor(colorA, colorB, t).replace('rgb(', 'rgba(').slice(0, -1) + `, ${alpha})`;
+  }
+
   function drawBackground(t) {
-    // Castle-hall gradient: deep indigo stone fading to a violet haze low down
+    const dT = levelDanger();
+
+    // Castle-hall gradient: deep indigo stone fading to a violet haze low
+    // down at level 1, trending toward a hot crimson glow by level 10.
     const sky = ctx.createLinearGradient(0, 0, 0, VIEW_H);
-    sky.addColorStop(0, '#140c24');
-    sky.addColorStop(0.5, '#241536');
-    sky.addColorStop(1, '#3d2350');
+    sky.addColorStop(0, lerpColor('#140c24', '#2a0808', dT));
+    sky.addColorStop(0.5, lerpColor('#241536', '#4a1210', dT));
+    sky.addColorStop(1, lerpColor('#3d2350', '#6b1f18', dT));
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
@@ -544,7 +651,7 @@
 
     // Distant brick wall texture band above the platforms
     const parallax = state.cameraX * 0.3;
-    ctx.fillStyle = '#1e1430';
+    ctx.fillStyle = lerpColor('#1e1430', '#341210', dT);
     ctx.fillRect(0, GROUND_Y - 70, VIEW_W, 70);
     ctx.strokeStyle = 'rgba(0,0,0,0.35)';
     ctx.lineWidth = 1;
@@ -555,9 +662,9 @@
       ctx.stroke();
     }
 
-    // Drifting purple ground fog
+    // Drifting ground fog: purple at level 1, smoky red haze by level 10
     const parallax2 = state.cameraX * 0.5;
-    ctx.fillStyle = 'rgba(190, 120, 220, 0.10)';
+    ctx.fillStyle = `rgba(${Math.round(190 + dT * 40)}, ${Math.round(120 - dT * 70)}, ${Math.round(220 - dT * 170)}, 0.10)`;
     for (let i = -1; i < 8; i++) {
       const fx = i * 300 - (parallax2 % 300) + Math.sin(t * 0.3 + i) * 12;
       const fy = GROUND_Y - 30 - (i % 3) * 18;
@@ -769,17 +876,19 @@
   }
 
   function drawSlimePool(t) {
-    // Glowing purple ooze filling the pit gaps below the platforms.
+    // Glowing ooze filling the pit gaps below the platforms — purple at
+    // level 1, shifting toward molten lava-orange by level 10.
     // Drawn before the platforms so solid ground/floor tiles paint over it
     // wherever the level actually has floor, leaving only the pits lethal.
+    const dT = levelDanger();
     const poolY = KILL_Y - 30;
     const grad = ctx.createLinearGradient(0, poolY, 0, VIEW_H);
-    grad.addColorStop(0, 'rgba(190, 60, 230, 0.9)');
-    grad.addColorStop(1, 'rgba(90, 20, 120, 0.95)');
+    grad.addColorStop(0, lerpRgba('#be3ce6', '#ff8a1e', dT, 0.9));
+    grad.addColorStop(1, lerpRgba('#5a1478', '#8a2c0a', dT, 0.95));
     ctx.fillStyle = grad;
     ctx.fillRect(0, poolY, VIEW_W, VIEW_H - poolY);
 
-    ctx.strokeStyle = 'rgba(230, 160, 255, 0.8)';
+    ctx.strokeStyle = lerpRgba('#e6a0ff', '#ffd27a', dT, 0.8);
     ctx.lineWidth = 3;
     ctx.beginPath();
     for (let x = 0; x <= VIEW_W; x += 20) {
@@ -790,7 +899,7 @@
     ctx.stroke();
 
     // rising bubbles
-    ctx.fillStyle = 'rgba(230, 180, 255, 0.7)';
+    ctx.fillStyle = lerpRgba('#e6b4ff', '#ffe0a0', dT, 0.7);
     for (let i = 0; i < 14; i++) {
       const bx = (i * 97 + (t * 30) % 97 * 3) % VIEW_W;
       const by = poolY + 20 + ((i * 53 + t * 40) % (VIEW_H - poolY - 20));
@@ -1185,6 +1294,15 @@
     ctx.textAlign = 'left';
     ctx.fillText(state.score + ' G', 124, 23);
 
+    // Level indicator, under the hearts
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(
+      `LEVEL ${state.currentLevel + 1}/${LEVEL_COUNT} · ${DIFFICULTY_NAMES[state.currentLevel]}`,
+      20, 46
+    );
+
     // Progress, small, top-center
     const pct = Math.round(Math.min(100, (player.x / (FLAG_X)) * 100));
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
@@ -1235,23 +1353,44 @@
 
     ctx.fillStyle = 'rgba(0,0,0,0.65)';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-
     ctx.textAlign = 'center';
+
+    if (state.mode === 'levelcomplete') {
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = 'bold 40px monospace';
+      ctx.fillText(`LEVEL ${state.currentLevel + 1} COMPLETE!`, VIEW_W / 2, VIEW_H / 2 - 20);
+      ctx.fillStyle = '#fff';
+      ctx.font = '20px monospace';
+      ctx.fillText('Score: ' + state.score, VIEW_W / 2, VIEW_H / 2 + 20);
+      ctx.font = '15px monospace';
+      ctx.fillText(
+        `Get ready for Level ${state.currentLevel + 2} · ${DIFFICULTY_NAMES[state.currentLevel + 1]}`,
+        VIEW_W / 2, VIEW_H / 2 + 50
+      );
+      ctx.textAlign = 'left';
+      return;
+    }
+
     ctx.fillStyle = state.mode === 'victory' ? '#ffd23f' : '#e03c31';
-    ctx.font = 'bold 48px monospace';
-    ctx.fillText(state.mode === 'victory' ? 'YOU WIN!' : 'GAME OVER', VIEW_W / 2, VIEW_H / 2 - 30);
+    ctx.font = 'bold 40px monospace';
+    ctx.fillText(state.mode === 'victory' ? 'ALL 10 LEVELS CLEARED!' : 'GAME OVER', VIEW_W / 2, VIEW_H / 2 - 30);
 
     ctx.fillStyle = '#fff';
     ctx.font = '20px monospace';
     ctx.fillText('Final Score: ' + state.score, VIEW_W / 2, VIEW_H / 2 + 15);
-    ctx.fillText('Press ENTER or SPACE to restart', VIEW_W / 2, VIEW_H / 2 + 50);
+    if (state.mode === 'gameover') {
+      ctx.font = '15px monospace';
+      ctx.fillText(`Reached Level ${state.currentLevel + 1} / ${LEVEL_COUNT}`, VIEW_W / 2, VIEW_H / 2 + 38);
+    }
+    ctx.font = '18px monospace';
+    ctx.fillText('Press ENTER or SPACE to restart', VIEW_W / 2, VIEW_H / 2 + 60);
 
     if (state.leaderboard.length) {
       ctx.font = 'bold 16px monospace';
-      ctx.fillText('TOP SCORES', VIEW_W / 2, VIEW_H / 2 + 85);
+      ctx.fillText('TOP SCORES', VIEW_W / 2, VIEW_H / 2 + 92);
       ctx.font = '15px monospace';
       state.leaderboard.forEach((entry, i) => {
-        ctx.fillText(`${i + 1}. ${entry.name} — ${entry.score}`, VIEW_W / 2, VIEW_H / 2 + 108 + i * 20);
+        ctx.fillText(`${i + 1}. ${entry.name} — ${entry.score}`, VIEW_W / 2, VIEW_H / 2 + 115 + i * 20);
       });
     }
 
