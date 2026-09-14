@@ -8,44 +8,51 @@
 
   html, body {
     height: 100%;
-    background: #1a1a2e;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    width: 100%;
+    background: #05050f;
     font-family: 'Courier New', monospace;
     overflow: hidden;
   }
 
   #gameWrap {
+    position: fixed;
+    inset: 0;
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 10px;
-    width: 100%;
+    justify-content: center;
   }
 
   #title {
+    position: absolute;
+    top: 10px;
+    left: 0;
+    right: 0;
+    text-align: center;
     color: #ff6fa8;
     text-shadow: 0 0 8px #d6345f, 0 0 18px #d6345f, 3px 3px 0 #000;
     letter-spacing: 2px;
-    font-size: clamp(16px, 2.2vw, 24px);
+    font-size: clamp(13px, 1.6vw, 20px);
+    opacity: 0.85;
+    pointer-events: none;
+    z-index: 2;
   }
 
   canvas {
+    display: block;
     background: #05050f;
-    border: 6px solid #1a1022;
-    border-radius: 6px;
-    box-shadow: 0 0 0 4px #4a2560, 0 10px 40px rgba(0,0,0,0.85);
-    image-rendering: pixelated;
-    image-rendering: crisp-edges;
-    width: min(96vw, calc(88vh * 800 / 480), 1500px);
-    height: auto;
-    aspect-ratio: 800 / 480;
   }
 
   #hint {
+    position: absolute;
+    bottom: 8px;
+    left: 0;
+    right: 0;
+    text-align: center;
     color: #aaa;
-    font-size: 12px;
+    font-size: clamp(9px, 1.2vw, 12px);
+    opacity: 0.8;
+    pointer-events: none;
+    z-index: 2;
   }
 </style>
 </head>
@@ -66,8 +73,33 @@
   // ---------------------------------------------------------------------
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
-  const VIEW_W = canvas.width;
-  const VIEW_H = canvas.height;
+  // Logical/world coordinate system used by every gameplay and drawing
+  // calculation below — independent of the canvas's actual pixel size.
+  const VIEW_W = 800;
+  const VIEW_H = 480;
+
+  // Full-page, high-resolution canvas: the element fills the viewport
+  // (preserving the 800x480 aspect ratio) while its backing pixel buffer
+  // is scaled by devicePixelRatio (capped) for crisp, high-DPI/"4K" output.
+  // A transform maps the fixed VIEW_W x VIEW_H logical space onto whatever
+  // the actual buffer size ends up being, so no drawing code changes.
+  function layoutCanvas() {
+    const ratio = VIEW_W / VIEW_H;
+    let cssW = window.innerWidth;
+    let cssH = cssW / ratio;
+    if (cssH > window.innerHeight) {
+      cssH = window.innerHeight;
+      cssW = cssH * ratio;
+    }
+    canvas.style.width = cssW + 'px';
+    canvas.style.height = cssH + 'px';
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    canvas.width = Math.round(cssW * dpr);
+    canvas.height = Math.round(cssH * dpr);
+    ctx.setTransform(canvas.width / VIEW_W, 0, 0, canvas.height / VIEW_H, 0, 0);
+  }
+  window.addEventListener('resize', layoutCanvas);
+  layoutCanvas();
 
   // ---------------------------------------------------------------------
   // Supabase leaderboard (public anon key — safe to expose client-side,
@@ -140,12 +172,25 @@
   const keys = {};
   const bind = { left: ['ArrowLeft', 'a', 'A'], right: ['ArrowRight', 'd', 'D'], jump: ['ArrowUp', 'w', 'W', ' '] };
 
+  // Jump is edge-triggered (one event per key press, not per held frame) so
+  // a second press while still airborne can be told apart from just holding
+  // the key down — that second press fuels the higher double-jump boost.
+  let jumpKeyDown = false;
+  let jumpEdge = false;
+
   window.addEventListener('keydown', (e) => {
     keys[e.key] = true;
-    if (bind.jump.includes(e.key)) e.preventDefault();
+    if (bind.jump.includes(e.key)) {
+      e.preventDefault();
+      if (!jumpKeyDown) jumpEdge = true;
+      jumpKeyDown = true;
+    }
     if (state.mode !== 'playing' && (e.key === 'Enter' || e.key === ' ')) resetGame();
   });
-  window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+  window.addEventListener('keyup', (e) => {
+    keys[e.key] = false;
+    if (bind.jump.includes(e.key)) jumpKeyDown = false;
+  });
 
   function isDown(action) { return bind[action].some(k => keys[k]); }
 
@@ -245,6 +290,7 @@
       onGround: false,
       facing: 1,
       invuln: 0,
+      jumpsUsed: 0,
     };
   }
 
@@ -331,10 +377,18 @@
     }
     p.vx = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, p.vx));
 
-    // --- Jump ---
-    if (isDown('jump') && p.onGround) {
-      p.vy = JUMP_VELOCITY;
-      p.onGround = false;
+    // --- Jump: first press leaves the ground, a second press while still
+    // airborne is a double-jump that boosts higher than a single jump ---
+    if (jumpEdge) {
+      jumpEdge = false;
+      if (p.onGround) {
+        p.vy = JUMP_VELOCITY;
+        p.onGround = false;
+        p.jumpsUsed = 1;
+      } else if (p.jumpsUsed === 1) {
+        p.vy = JUMP_VELOCITY * 1.2;
+        p.jumpsUsed = 2;
+      }
     }
 
     // --- Gravity ---
@@ -343,6 +397,7 @@
 
     moveAndCollide(p, p.vx * dt, p.vy * dt);
     p.onGround = p.onGroundThisFrame;
+    if (p.onGround) p.jumpsUsed = 0;
 
     // Level bounds
     if (p.x < 0) p.x = 0;
@@ -484,6 +539,9 @@
       drawGothicWindow(wx, 40, t);
     }
 
+    // The hotel from the movie poster, looming behind the finish flag
+    drawEndHotel(t);
+
     // Distant brick wall texture band above the platforms
     const parallax = state.cameraX * 0.3;
     ctx.fillStyle = '#1e1430';
@@ -598,6 +656,118 @@
     ctx.fill();
   }
 
+  function drawEndHotel(t) {
+    const worldX = FLAG_X - 460;
+    const hx = worldX - state.cameraX;
+    if (hx > VIEW_W + 20 || hx + 600 < -20) return;
+
+    // Base wing
+    ctx.fillStyle = '#160a22';
+    ctx.fillRect(hx + 40, 160, 520, GROUND_Y - 160);
+
+    // Left turret with a conical cap
+    ctx.fillStyle = '#1c0e28';
+    ctx.fillRect(hx + 55, 90, 95, GROUND_Y - 90);
+    ctx.beginPath();
+    ctx.moveTo(hx + 45, 90);
+    ctx.lineTo(hx + 102, 48);
+    ctx.lineTo(hx + 160, 90);
+    ctx.closePath();
+    ctx.fill();
+
+    // Right turret with a conical cap
+    ctx.fillStyle = '#1c0e28';
+    ctx.fillRect(hx + 450, 110, 95, GROUND_Y - 110);
+    ctx.beginPath();
+    ctx.moveTo(hx + 440, 110);
+    ctx.lineTo(hx + 497, 66);
+    ctx.lineTo(hx + 555, 110);
+    ctx.closePath();
+    ctx.fill();
+
+    // Tall central tower with a steep spire
+    ctx.fillStyle = '#241436';
+    ctx.fillRect(hx + 220, 40, 160, GROUND_Y - 40);
+    ctx.beginPath();
+    ctx.moveTo(hx + 205, 40);
+    ctx.lineTo(hx + 300, -20);
+    ctx.lineTo(hx + 395, 40);
+    ctx.closePath();
+    ctx.fill();
+    // little finial ball on the spire tip
+    ctx.beginPath();
+    ctx.arc(hx + 300, -22, 5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Glowing crooked windows scattered across the facade (movie-poster style)
+    ctx.fillStyle = 'rgba(255, 200, 110, 0.85)';
+    const winRows = [
+      [70, 130], [70, 200], [70, 260], [70, 320], [70, 380],
+      [120, 130], [120, 200], [120, 320],
+      [240, 90], [240, 150], [240, 210], [240, 270], [240, 330], [240, 390],
+      [300, 90], [300, 210], [300, 330],
+      [340, 90], [340, 150], [340, 270], [340, 390],
+      [470, 150], [470, 210], [470, 320], [470, 380],
+      [510, 150], [510, 260],
+    ];
+    for (let i = 0; i < winRows.length; i++) {
+      const [wx0, wy0] = winRows[i];
+      const flicker = 0.55 + Math.abs(Math.sin(t * 1.3 + i * 1.7)) * 0.45;
+      ctx.globalAlpha = flicker;
+      ctx.fillRect(hx + wx0, wy0, 10, 14);
+    }
+    ctx.globalAlpha = 1;
+
+    // Glowing pink "HOTEL" sign mounted on the central tower
+    ctx.shadowColor = '#ff4d8f';
+    ctx.shadowBlur = 12;
+    ctx.fillStyle = '#ff9fc4';
+    ctx.font = 'bold 22px "Trebuchet MS", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('HOTEL', hx + 300, 125);
+    ctx.shadowBlur = 0;
+    ctx.textAlign = 'left';
+
+    // Arched entrance with flanking torches
+    ctx.fillStyle = '#0a0512';
+    ctx.beginPath();
+    ctx.moveTo(hx + 265, GROUND_Y);
+    ctx.lineTo(hx + 265, GROUND_Y - 50);
+    ctx.quadraticCurveTo(hx + 300, GROUND_Y - 85, hx + 335, GROUND_Y - 50);
+    ctx.lineTo(hx + 335, GROUND_Y);
+    ctx.closePath();
+    ctx.fill();
+
+    for (const tx of [hx + 250, hx + 350]) {
+      const flameGlow = ctx.createRadialGradient(tx, GROUND_Y - 55, 1, tx, GROUND_Y - 55, 16);
+      flameGlow.addColorStop(0, 'rgba(255, 170, 90, 0.9)');
+      flameGlow.addColorStop(1, 'rgba(255, 170, 90, 0)');
+      ctx.fillStyle = flameGlow;
+      ctx.beginPath();
+      ctx.arc(tx, GROUND_Y - 55, 16, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // A couple of bats circling the towers
+    ctx.fillStyle = '#0c0812';
+    for (let b = 0; b < 2; b++) {
+      const orbit = t * 1.2 + b * Math.PI;
+      const bx = hx + 300 + Math.cos(orbit) * 220;
+      const by = 70 + Math.sin(orbit) * 30 + b * 20;
+      ctx.save();
+      ctx.translate(bx, by);
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.bezierCurveTo(-6, -4, -12, -2, -14, 2);
+      ctx.bezierCurveTo(-9, 1, -5, 2, 0, 5);
+      ctx.bezierCurveTo(5, 2, 9, 1, 14, 2);
+      ctx.bezierCurveTo(12, -2, 6, -4, 0, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
   function drawSlimePool(t) {
     // Glowing purple ooze filling the pit gaps below the platforms.
     // Drawn before the platforms so solid ground/floor tiles paint over it
@@ -671,14 +841,14 @@
       ctx.save();
       ctx.translate(cx, c.y);
       ctx.scale(0.3 + squish * 0.7, 1);
-      ctx.shadowColor = '#7fffd4';
-      ctx.shadowBlur = 14;
+      ctx.shadowColor = '#8a6a12';
+      ctx.shadowBlur = 12;
       ctx.beginPath();
-      ctx.fillStyle = 'rgba(170, 255, 230, 0.85)';
+      ctx.fillStyle = '#b8860b';
       ctx.arc(0, 0, 10, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
-      ctx.strokeStyle = '#3fd6b0';
+      ctx.strokeStyle = '#5c4108';
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.restore();
