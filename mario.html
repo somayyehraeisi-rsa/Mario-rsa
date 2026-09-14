@@ -61,7 +61,7 @@
 <div id="gameWrap">
   <div id="title">MISS MARIO IN HOTEL TRANSYLVANIA</div>
   <canvas id="game" width="800" height="480"></canvas>
-  <div id="hint">Move: ← → / A D &nbsp;|&nbsp; Jump: Space / ↑ / W &nbsp;|&nbsp; Stomp Goombas from above!</div>
+  <div id="hint">Move: ← → / A D &nbsp;|&nbsp; Jump: Space / ↑ / W &nbsp;|&nbsp; Down: ↓ / S enters pipes &nbsp;|&nbsp; Stomp Goombas from above!</div>
 </div>
 
 <script>
@@ -170,13 +170,23 @@
   // Input handling
   // ---------------------------------------------------------------------
   const keys = {};
-  const bind = { left: ['ArrowLeft', 'a', 'A'], right: ['ArrowRight', 'd', 'D'], jump: ['ArrowUp', 'w', 'W', ' '] };
+  const bind = {
+    left: ['ArrowLeft', 'a', 'A'],
+    right: ['ArrowRight', 'd', 'D'],
+    jump: ['ArrowUp', 'w', 'W', ' '],
+    down: ['ArrowDown', 's', 'S'],
+  };
 
-  // Jump is edge-triggered (one event per key press, not per held frame) so
-  // a second press while still airborne can be told apart from just holding
-  // the key down — that second press fuels the higher double-jump boost.
+  // Jump and Down are edge-triggered (one event per key press, not per held
+  // frame). For jump, that's what lets a second press while still airborne
+  // be told apart from just holding the key — it fuels the double-jump
+  // boost. For Down, it stops a warp from immediately re-triggering a warp
+  // back if the key is still held once the player lands inside the pipe
+  // it warped into.
   let jumpKeyDown = false;
   let jumpEdge = false;
+  let downKeyDown = false;
+  let downEdge = false;
 
   window.addEventListener('keydown', (e) => {
     keys[e.key] = true;
@@ -185,11 +195,16 @@
       if (!jumpKeyDown) jumpEdge = true;
       jumpKeyDown = true;
     }
+    if (bind.down.includes(e.key)) {
+      if (!downKeyDown) downEdge = true;
+      downKeyDown = true;
+    }
     if (state.mode !== 'playing' && (e.key === 'Enter' || e.key === ' ')) resetGame();
   });
   window.addEventListener('keyup', (e) => {
     keys[e.key] = false;
     if (bind.jump.includes(e.key)) jumpKeyDown = false;
+    if (bind.down.includes(e.key)) downKeyDown = false;
   });
 
   function isDown(action) { return bind[action].some(k => keys[k]); }
@@ -219,6 +234,15 @@
     rect(2680, 300, 100, 24),
     rect(2980, 340, 140, 24),
     rect(3150, 250, 120, 24),
+  ];
+
+  // Warp pipes: standing on one and pressing Down teleports to its pair.
+  // A classic Mario shortcut — hop into pipe 0 near the start to pop out
+  // of pipe 1 further down the level (and back again).
+  const PIPE_W = 56, PIPE_H = 64;
+  const pipes = [
+    { x: 150, y: GROUND_Y, w: PIPE_W, h: PIPE_H, linkedTo: 1 },
+    { x: 1000, y: GROUND_Y, w: PIPE_W, h: PIPE_H, linkedTo: 0 },
   ];
 
   const coins = [
@@ -291,6 +315,9 @@
       facing: 1,
       invuln: 0,
       jumpsUsed: 0,
+      warping: false,
+      warpT: 0,
+      warpTo: null,
     };
   }
 
@@ -363,8 +390,40 @@
   // ---------------------------------------------------------------------
   // Update
   // ---------------------------------------------------------------------
+  function findPipeUnder(p) {
+    const cx = p.x + p.w / 2;
+    return pipes.find(pp => cx >= pp.x && cx <= pp.x + pp.w && Math.abs((p.y + p.h) - pp.y) < 6);
+  }
+
+  function startWarp(pipe) {
+    const p = player;
+    p.warping = true;
+    p.warpT = 0.5;
+    p.warpTo = pipes[pipe.linkedTo];
+    p.vx = 0;
+    p.vy = 0;
+  }
+
   function updatePlayer(dt) {
     const p = player;
+
+    // --- Warp pipes: sink into the entrance, teleport, rise out of the
+    // linked pipe. Physics/input are suspended for the short animation. ---
+    if (p.warping) {
+      downEdge = false; // swallow any Down presses mid-animation
+      const wasSinking = p.warpT > 0.25;
+      p.warpT -= dt;
+      if (wasSinking && p.warpT <= 0.25 && p.warpTo) {
+        p.x = p.warpTo.x + p.warpTo.w / 2 - p.w / 2;
+        p.y = p.warpTo.y - p.h;
+        state.cameraX = Math.max(0, Math.min(LEVEL_WIDTH - VIEW_W, p.x + p.w / 2 - VIEW_W / 2));
+      }
+      if (p.warpT <= 0) {
+        p.warping = false;
+        p.onGround = true;
+      }
+      return;
+    }
 
     // --- Horizontal input / inertia ---
     const accel = p.onGround ? MOVE_ACCEL : AIR_ACCEL;
@@ -398,6 +457,15 @@
     moveAndCollide(p, p.vx * dt, p.vy * dt);
     p.onGround = p.onGroundThisFrame;
     if (p.onGround) p.jumpsUsed = 0;
+
+    // --- Warp pipe: press Down while standing on a pipe's mouth ---
+    if (downEdge) {
+      downEdge = false;
+      if (p.onGround) {
+        const pipe = findPipeUnder(p);
+        if (pipe) startWarp(pipe);
+      }
+    }
 
     // Level bounds
     if (p.x < 0) p.x = 0;
@@ -529,6 +597,22 @@
       ctx.fill();
     }
     ctx.globalAlpha = 1;
+
+    // Hazy far-distance mountain range — the slowest-moving layer, giving
+    // the scene an extra plane of depth behind the windows/hotel.
+    const farParallax = state.cameraX * 0.08;
+    ctx.fillStyle = 'rgba(60, 40, 90, 0.35)';
+    for (let i = -1; i < 6; i++) {
+      const mx = i * 360 - (farParallax % 360);
+      ctx.beginPath();
+      ctx.moveTo(mx, GROUND_Y - 60);
+      ctx.lineTo(mx + 90, GROUND_Y - 190);
+      ctx.lineTo(mx + 190, GROUND_Y - 100);
+      ctx.lineTo(mx + 280, GROUND_Y - 220);
+      ctx.lineTo(mx + 380, GROUND_Y - 60);
+      ctx.closePath();
+      ctx.fill();
+    }
 
     // Repeating tall gothic windows with the moon showing through the glass,
     // a gargoyle perched on each stone ledge.
@@ -815,12 +899,44 @@
       if (sx + s.w < 0 || sx > VIEW_W) continue;
 
       const isGround = s.y === GROUND_Y;
-      ctx.fillStyle = isGround ? '#453452' : '#523a5e';
+
+      // Soft cast shadow on whatever is behind/below a floating platform,
+      // and an ambient-occlusion strip under ground tiles — both read as
+      // depth cues that a flat fill can't give.
+      if (!isGround) {
+        ctx.fillStyle = 'rgba(4, 2, 8, 0.35)';
+        ctx.beginPath();
+        ctx.ellipse(sx + s.w / 2, s.y + s.h + 10, s.w / 2, 6, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Front face: vertical gradient (moonlight catching the top, the
+      // block falling into shadow toward the bottom) instead of a flat fill.
+      const face = ctx.createLinearGradient(0, s.y, 0, s.y + s.h);
+      if (isGround) {
+        face.addColorStop(0, '#6b5a80');
+        face.addColorStop(0.18, '#4c3a5a');
+        face.addColorStop(1, '#291f38');
+      } else {
+        face.addColorStop(0, '#7a4f8a');
+        face.addColorStop(0.18, '#5a3d68');
+        face.addColorStop(1, '#301f3c');
+      }
+      ctx.fillStyle = face;
       ctx.fillRect(sx, s.y, s.w, s.h);
-      // top highlight strip: worn stone / mortar tint
-      ctx.fillStyle = isGround ? '#6b5a80' : '#7a4f8a';
-      ctx.fillRect(sx, s.y, s.w, 8);
-      // cracked texture
+
+      // Lit top edge (the actual walkable surface catching the moonlight)
+      ctx.fillStyle = isGround ? '#8a7aa0' : '#9a6cae';
+      ctx.fillRect(sx, s.y, s.w, 4);
+
+      // Left edge catches a little light, right edge falls into shadow —
+      // reads as a subtle extrusion/bevel on the block.
+      ctx.fillStyle = 'rgba(255,255,255,0.10)';
+      ctx.fillRect(sx, s.y + 4, 3, s.h - 4);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(sx + s.w - 4, s.y + 4, 4, s.h - 4);
+
+      // cracked mortar texture
       ctx.strokeStyle = 'rgba(0,0,0,0.4)';
       ctx.lineWidth = 1;
       for (let bx = 0; bx < s.w; bx += 20) {
@@ -828,6 +944,104 @@
         ctx.moveTo(sx + bx, s.y + 8);
         ctx.lineTo(sx + bx, s.y + s.h);
         ctx.stroke();
+      }
+    }
+  }
+
+  // Finds the y of the nearest solid surface directly beneath world-x
+  // `wx` (the highest/topmost one, i.e. smallest y). Returns null when
+  // there is nothing below (an open pit) — used to fade out contact
+  // shadows over the slime pool instead of drawing them on nothing.
+  function findGroundY(wx) {
+    let best = null;
+    for (const s of solids) {
+      if (wx < s.x || wx > s.x + s.w) continue;
+      if (best === null || s.y < best) best = s.y;
+    }
+    return best;
+  }
+
+  // A soft squashed ellipse cast onto the surface below an entity — the
+  // single biggest cue for "this thing is a solid object above a floor"
+  // rather than a flat sprite floating on a flat background.
+  function drawContactShadow(worldX, entityBottomY, halfWidth) {
+    const gy = findGroundY(worldX);
+    if (gy === null) return;
+    const dist = Math.max(0, gy - entityBottomY);
+    const scale = Math.max(0, 1 - dist / 200);
+    if (scale <= 0.03) return;
+    const sx = worldX - state.cameraX;
+    ctx.fillStyle = `rgba(3, 1, 6, ${0.4 * scale})`;
+    ctx.beginPath();
+    ctx.ellipse(sx, gy - 1, halfWidth * (0.5 + scale * 0.5), 4 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawShadows() {
+    for (const en of enemies) {
+      if (!en.alive) continue;
+      drawContactShadow(en.x + en.w / 2, en.y + en.h, en.w / 2);
+    }
+    drawContactShadow(player.x + player.w / 2, player.y + player.h, player.w / 2);
+  }
+
+  function drawPipes(t) {
+    for (const pp of pipes) {
+      const sx = pp.x - state.cameraX;
+      if (sx + pp.w < -20 || sx > VIEW_W + 20) continue;
+
+      const top = pp.y - pp.h;
+      const lipH = 16;
+
+      // cast shadow on the ground it's planted in
+      ctx.fillStyle = 'rgba(3, 1, 6, 0.4)';
+      ctx.beginPath();
+      ctx.ellipse(sx + pp.w / 2, pp.y + 3, pp.w / 2 + 4, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // main body — green gradient for a rounded, tube-like look
+      const bodyGrad = ctx.createLinearGradient(sx, 0, sx + pp.w, 0);
+      bodyGrad.addColorStop(0, '#0e5c28');
+      bodyGrad.addColorStop(0.22, '#2fae52');
+      bodyGrad.addColorStop(0.5, '#3fd66a');
+      bodyGrad.addColorStop(0.78, '#1f8a3e');
+      bodyGrad.addColorStop(1, '#0a4a20');
+      ctx.fillStyle = bodyGrad;
+      ctx.fillRect(sx + 4, top + lipH, pp.w - 8, pp.h - lipH);
+
+      // wider collar/lip at the mouth of the pipe
+      ctx.fillStyle = bodyGrad;
+      ctx.fillRect(sx, top, pp.w, lipH);
+      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      ctx.fillRect(sx, top, pp.w, 3);
+
+      // dark outline
+      ctx.strokeStyle = '#062f14';
+      ctx.lineWidth = 2.5;
+      ctx.strokeRect(sx + 1, top + 1, pp.w - 2, lipH - 2);
+      ctx.strokeRect(sx + 5, top + lipH, pp.w - 10, pp.h - lipH - 1);
+
+      // glossy highlight streak down the left side
+      ctx.fillStyle = 'rgba(255,255,255,0.22)';
+      ctx.fillRect(sx + 10, top + lipH + 4, 5, pp.h - lipH - 8);
+
+      // dark opening at the mouth (where the character sinks/rises)
+      ctx.fillStyle = '#031006';
+      ctx.beginPath();
+      ctx.ellipse(sx + pp.w / 2, top + lipH / 2, pp.w / 2 - 5, lipH / 2 - 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // pulsing hint when the player is standing on a usable pipe
+      const cx = player.x + player.w / 2;
+      const onThisPipe = player.onGround && !player.warping &&
+        cx >= pp.x && cx <= pp.x + pp.w && Math.abs((player.y + player.h) - pp.y) < 6;
+      if (onThisPipe) {
+        const bob = Math.sin(t * 5) * 3;
+        ctx.fillStyle = 'rgba(230, 255, 230, 0.9)';
+        ctx.font = 'bold 12px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('▼', sx + pp.w / 2, top - 8 + bob);
+        ctx.textAlign = 'left';
       }
     }
   }
@@ -843,14 +1057,23 @@
       ctx.scale(0.3 + squish * 0.7, 1);
       ctx.shadowColor = '#8a6a12';
       ctx.shadowBlur = 12;
+      const coinGrad = ctx.createRadialGradient(-3, -3, 1, 0, 0, 11);
+      coinGrad.addColorStop(0, '#f0c95c');
+      coinGrad.addColorStop(0.5, '#b8860b');
+      coinGrad.addColorStop(1, '#7a5608');
       ctx.beginPath();
-      ctx.fillStyle = '#b8860b';
+      ctx.fillStyle = coinGrad;
       ctx.arc(0, 0, 10, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
       ctx.strokeStyle = '#5c4108';
       ctx.lineWidth = 2;
       ctx.stroke();
+      // glossy highlight streak
+      ctx.fillStyle = 'rgba(255, 245, 210, 0.75)';
+      ctx.beginPath();
+      ctx.ellipse(-3, -4, 3, 5, -0.4, 0, Math.PI * 2);
+      ctx.fill();
       ctx.restore();
     }
   }
@@ -911,8 +1134,12 @@
     ctx.fillRect(ex + 4, top + h - 6, 8, 6);
     ctx.fillRect(ex + w - 12, top + h - 6, 8, 6);
 
-    // angry spotted cap
-    ctx.fillStyle = '#6a2d8f';
+    // angry spotted cap — domed gradient for volume
+    const capGrad = ctx.createRadialGradient(cx - w * 0.15, top + h * 0.42 - w * 0.2, 1, cx, top + h * 0.42, w * 0.55);
+    capGrad.addColorStop(0, '#9a5cc8');
+    capGrad.addColorStop(0.6, '#6a2d8f');
+    capGrad.addColorStop(1, '#3c1656');
+    ctx.fillStyle = capGrad;
     ctx.beginPath();
     ctx.arc(cx, top + h * 0.42, w / 2, Math.PI, 0);
     ctx.fill();
@@ -962,7 +1189,11 @@
     ctx.quadraticCurveTo(cx + 12, cy + 2, cx, cy + 6);
     ctx.closePath();
     ctx.fill();
-    // body
+    // body — small radial highlight so it doesn't read as a flat silhouette
+    const batGrad = ctx.createRadialGradient(cx - 2, cy - 2, 0.5, cx, cy, 8);
+    batGrad.addColorStop(0, '#3a2650');
+    batGrad.addColorStop(1, '#170a22');
+    ctx.fillStyle = batGrad;
     ctx.beginPath();
     ctx.ellipse(cx, cy, 7, 8, 0, 0, Math.PI * 2);
     ctx.fill();
@@ -989,8 +1220,12 @@
 
   function drawGhostEnemy(ex, en, t) {
     const cx = ex + en.w / 2, top = en.y, w = en.w, h = en.h;
-    // flowing hooded robe
-    ctx.fillStyle = '#1c1428';
+    // flowing hooded robe — gradient gives it a sense of folds/volume
+    const robeGrad = ctx.createLinearGradient(cx - w / 2, top, cx + w / 2, top + h);
+    robeGrad.addColorStop(0, '#332146');
+    robeGrad.addColorStop(0.5, '#1c1428');
+    robeGrad.addColorStop(1, '#0c0714');
+    ctx.fillStyle = robeGrad;
     ctx.beginPath();
     ctx.moveTo(cx - w / 2, top + h);
     ctx.quadraticCurveTo(cx - w / 2 - 4, top + h * 0.4, cx, top);
@@ -1035,29 +1270,48 @@
     ctx.shadowBlur = 0;
   }
 
+  function warpSquish(p) {
+    if (!p.warping) return 1;
+    if (p.warpT > 0.25) {
+      const local = (p.warpT - 0.25) / 0.25; // 1 -> 0 while sinking into the old pipe
+      return 0.15 + local * 0.85;
+    }
+    const local = p.warpT / 0.25; // 1 -> 0 while rising out of the new pipe
+    return 1 - local * 0.85;
+  }
+
   function drawPlayer() {
     const p = player;
     // Flash while invulnerable
     if (p.invuln > 0 && Math.floor(p.invuln * 12) % 2 === 0) return;
 
     const px = p.x - state.cameraX;
+    const squish = warpSquish(p);
     ctx.save();
-    ctx.translate(px + p.w / 2, 0);
-    ctx.scale(p.facing, 1);
-    ctx.translate(-p.w / 2, 0);
+    ctx.translate(px + p.w / 2, p.y + p.h);
+    ctx.scale(p.facing, squish);
+    ctx.translate(-p.w / 2, -(p.y + p.h));
 
-    // Legs: white stockings + red boots
+    // Legs: white stockings + shaded red boots
     ctx.fillStyle = '#f0ecf5';
     ctx.fillRect(4, p.y + 26, 20, 14);
-    ctx.fillStyle = '#c81e3a';
+    const bootGrad = ctx.createLinearGradient(0, p.y + 35, 0, p.y + 41);
+    bootGrad.addColorStop(0, '#e0355a');
+    bootGrad.addColorStop(1, '#8f1029');
+    ctx.fillStyle = bootGrad;
     ctx.fillRect(3, p.y + 35, 10, 6);
     ctx.fillRect(15, p.y + 35, 10, 6);
-    ctx.fillStyle = '#8f1029';
+    ctx.fillStyle = '#5c0a1c';
     ctx.fillRect(3, p.y + 39, 10, 2);
     ctx.fillRect(15, p.y + 39, 10, 2);
 
-    // Flared purple dress, drawn as a trapezoid
-    ctx.fillStyle = '#6a2d8f';
+    // Flared purple dress, drawn as a trapezoid with a light-from-upper-left
+    // gradient so it reads as fabric wrapped around a body, not a flat shape.
+    const dressGrad = ctx.createLinearGradient(2, p.y + 14, 26, p.y + 30);
+    dressGrad.addColorStop(0, '#8a4bb0');
+    dressGrad.addColorStop(0.5, '#6a2d8f');
+    dressGrad.addColorStop(1, '#3e1a58');
+    ctx.fillStyle = dressGrad;
     ctx.beginPath();
     ctx.moveTo(6, p.y + 14);
     ctx.lineTo(22, p.y + 14);
@@ -1068,18 +1322,29 @@
     ctx.fillStyle = '#4a1f66';
     ctx.fillRect(2, p.y + 27, 24, 3);
 
-    // White blouse collar
+    // White blouse collar, with a soft shadow cast by the chin/hair above it
     ctx.fillStyle = '#f0ecf5';
     ctx.fillRect(4, p.y + 12, 20, 6);
+    ctx.fillStyle = 'rgba(20, 10, 10, 0.18)';
+    ctx.fillRect(4, p.y + 12, 20, 2);
 
     // White glove peeking at the side
     ctx.fillStyle = '#fdfbff';
     ctx.beginPath();
     ctx.arc(1, p.y + 20, 4, 0, Math.PI * 2);
     ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.12)';
+    ctx.beginPath();
+    ctx.arc(2, p.y + 22, 3, 0, Math.PI * 2);
+    ctx.fill();
 
-    // Auburn hair falling behind the head/shoulders
-    ctx.fillStyle = '#7a3a26';
+    // Glossy black hair falling behind the head/shoulders — a radial sheen
+    // keeps solid black from reading as a flat silhouette.
+    const hairGrad = ctx.createRadialGradient(6, p.y + 10, 1, 12, p.y + 18, 26);
+    hairGrad.addColorStop(0, '#3a3a42');
+    hairGrad.addColorStop(0.35, '#141318');
+    hairGrad.addColorStop(1, '#050507');
+    ctx.fillStyle = hairGrad;
     ctx.beginPath();
     ctx.moveTo(3, p.y - 2);
     ctx.quadraticCurveTo(-3, p.y + 20, 2, p.y + 34);
@@ -1094,18 +1359,36 @@
     ctx.quadraticCurveTo(20, p.y + 14, 16, p.y - 1);
     ctx.closePath();
     ctx.fill();
+    // thin glossy highlight streaks down each hair panel
+    ctx.strokeStyle = 'rgba(140, 140, 160, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(4, p.y + 4);
+    ctx.quadraticCurveTo(0, p.y + 18, 3, p.y + 30);
+    ctx.moveTo(20, p.y + 4);
+    ctx.quadraticCurveTo(24, p.y + 18, 21, p.y + 30);
+    ctx.stroke();
 
-    // Head
+    // Head, with a faint jaw-shadow for a touch of roundness
     ctx.fillStyle = '#f0c9a0';
     ctx.fillRect(6, p.y, 16, 14);
+    ctx.fillStyle = 'rgba(160, 100, 70, 0.25)';
+    ctx.fillRect(6, p.y + 11, 16, 3);
 
-    // Auburn bangs
-    ctx.fillStyle = '#7a3a26';
+    // Glossy black bangs
+    ctx.fillStyle = hairGrad;
     ctx.fillRect(6, p.y, 5, 5);
     ctx.fillRect(17, p.y, 5, 5);
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(7, p.y, 1, 4);
+    ctx.fillRect(18, p.y, 1, 4);
 
-    // Purple cap with a red "M" badge
-    ctx.fillStyle = '#5a2380';
+    // Purple cap with a red "M" badge — domed gradient for a rounded look
+    const capGrad = ctx.createRadialGradient(10, p.y - 8, 1, 14, p.y - 4, 16);
+    capGrad.addColorStop(0, '#8a4fc0');
+    capGrad.addColorStop(0.55, '#5a2380');
+    capGrad.addColorStop(1, '#341350');
+    ctx.fillStyle = capGrad;
     ctx.beginPath();
     ctx.moveTo(3, p.y - 1);
     ctx.quadraticCurveTo(14, p.y - 12, 25, p.y - 1);
@@ -1125,9 +1408,13 @@
     ctx.fillText('M', 14, p.y - 3);
     ctx.textAlign = 'left';
 
-    // Blue eye, friendly (no glow)
+    // Eyebrow + blue eye, friendly (no glow)
+    ctx.fillStyle = 'rgba(15, 10, 10, 0.6)';
+    ctx.fillRect(15, p.y + 2, 5, 1);
     ctx.fillStyle = '#2a4d8f';
     ctx.fillRect(16, p.y + 4, 3, 4);
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillRect(17, p.y + 4, 1, 1);
 
     ctx.restore();
   }
@@ -1274,6 +1561,8 @@
     drawBackground(t);
     drawSlimePool(t);
     drawSolids();
+    drawPipes(t);
+    drawShadows();
     drawMushrooms();
     drawCoins(t);
     drawFlag();
