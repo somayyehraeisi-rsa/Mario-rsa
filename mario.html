@@ -593,12 +593,32 @@
   // ---------------------------------------------------------------------
   // Drawing
   // ---------------------------------------------------------------------
+  // Mixes two "#rrggbb" colors; t=0 is colorA, t=1 is colorB.
+  function lerpColor(colorA, colorB, t) {
+    const a = parseInt(colorA.slice(1), 16), b = parseInt(colorB.slice(1), 16);
+    const r = Math.round(((a >> 16) & 255) + (((b >> 16) & 255) - ((a >> 16) & 255)) * t);
+    const g = Math.round(((a >> 8) & 255) + (((b >> 8) & 255) - ((a >> 8) & 255)) * t);
+    const bl = Math.round((a & 255) + ((b & 255) - (a & 255)) * t);
+    return `rgb(${r}, ${g}, ${bl})`;
+  }
+
+  // 0 at level 1 (calm) -> 1 at level 10 (dangerous); used to redden the
+  // whole scene as the run gets harder, so each level visibly escalates.
+  function levelDanger() { return state.currentLevel / (LEVEL_COUNT - 1); }
+
+  function lerpRgba(colorA, colorB, t, alpha) {
+    return lerpColor(colorA, colorB, t).replace('rgb(', 'rgba(').slice(0, -1) + `, ${alpha})`;
+  }
+
   function drawBackground(t) {
-    // Castle-hall gradient: deep indigo stone fading to a violet haze low down
+    const dT = levelDanger();
+
+    // Castle-hall gradient: deep indigo stone fading to a violet haze low
+    // down at level 1, trending toward a hot crimson glow by level 10.
     const sky = ctx.createLinearGradient(0, 0, 0, VIEW_H);
-    sky.addColorStop(0, '#140c24');
-    sky.addColorStop(0.5, '#241536');
-    sky.addColorStop(1, '#3d2350');
+    sky.addColorStop(0, lerpColor('#140c24', '#2a0808', dT));
+    sky.addColorStop(0.5, lerpColor('#241536', '#4a1210', dT));
+    sky.addColorStop(1, lerpColor('#3d2350', '#6b1f18', dT));
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
@@ -631,7 +651,7 @@
 
     // Distant brick wall texture band above the platforms
     const parallax = state.cameraX * 0.3;
-    ctx.fillStyle = '#1e1430';
+    ctx.fillStyle = lerpColor('#1e1430', '#341210', dT);
     ctx.fillRect(0, GROUND_Y - 70, VIEW_W, 70);
     ctx.strokeStyle = 'rgba(0,0,0,0.35)';
     ctx.lineWidth = 1;
@@ -642,9 +662,9 @@
       ctx.stroke();
     }
 
-    // Drifting purple ground fog
+    // Drifting ground fog: purple at level 1, smoky red haze by level 10
     const parallax2 = state.cameraX * 0.5;
-    ctx.fillStyle = 'rgba(190, 120, 220, 0.10)';
+    ctx.fillStyle = `rgba(${Math.round(190 + dT * 40)}, ${Math.round(120 - dT * 70)}, ${Math.round(220 - dT * 170)}, 0.10)`;
     for (let i = -1; i < 8; i++) {
       const fx = i * 300 - (parallax2 % 300) + Math.sin(t * 0.3 + i) * 12;
       const fy = GROUND_Y - 30 - (i % 3) * 18;
@@ -856,17 +876,19 @@
   }
 
   function drawSlimePool(t) {
-    // Glowing purple ooze filling the pit gaps below the platforms.
+    // Glowing ooze filling the pit gaps below the platforms — purple at
+    // level 1, shifting toward molten lava-orange by level 10.
     // Drawn before the platforms so solid ground/floor tiles paint over it
     // wherever the level actually has floor, leaving only the pits lethal.
+    const dT = levelDanger();
     const poolY = KILL_Y - 30;
     const grad = ctx.createLinearGradient(0, poolY, 0, VIEW_H);
-    grad.addColorStop(0, 'rgba(190, 60, 230, 0.9)');
-    grad.addColorStop(1, 'rgba(90, 20, 120, 0.95)');
+    grad.addColorStop(0, lerpRgba('#be3ce6', '#ff8a1e', dT, 0.9));
+    grad.addColorStop(1, lerpRgba('#5a1478', '#8a2c0a', dT, 0.95));
     ctx.fillStyle = grad;
     ctx.fillRect(0, poolY, VIEW_W, VIEW_H - poolY);
 
-    ctx.strokeStyle = 'rgba(230, 160, 255, 0.8)';
+    ctx.strokeStyle = lerpRgba('#e6a0ff', '#ffd27a', dT, 0.8);
     ctx.lineWidth = 3;
     ctx.beginPath();
     for (let x = 0; x <= VIEW_W; x += 20) {
@@ -877,7 +899,7 @@
     ctx.stroke();
 
     // rising bubbles
-    ctx.fillStyle = 'rgba(230, 180, 255, 0.7)';
+    ctx.fillStyle = lerpRgba('#e6b4ff', '#ffe0a0', dT, 0.7);
     for (let i = 0; i < 14; i++) {
       const bx = (i * 97 + (t * 30) % 97 * 3) % VIEW_W;
       const by = poolY + 20 + ((i * 53 + t * 40) % (VIEW_H - poolY - 20));
