@@ -89,27 +89,34 @@
     left: 50%;
     top: 68%;
     transform: translate(-50%, -50%);
-    background: transparent;
-    border: 0;
-    padding: 10px 26px;
+    background: rgba(20, 8, 28, 0.55);
+    border: 2px solid #ff6fa8;
+    border-radius: 8px;
+    padding: 10px 28px;
     cursor: pointer;
     font-family: 'Courier New', monospace;
     font-weight: bold;
     font-size: clamp(14px, 2vw, 22px);
     letter-spacing: 0.25em;
     color: #ffe6f2;
+    box-shadow: 0 0 16px rgba(255, 111, 168, 0.55), inset 0 0 10px rgba(255, 111, 168, 0.15);
     text-shadow: 0 0 10px #ff4d8f, 0 0 22px #ff4d8f;
-    animation: blink 1.3s steps(1) infinite;
   }
 
   .press-start:hover {
     color: #fff;
-    text-shadow: 0 0 14px #ff7fb0, 0 0 30px #ff7fb0;
+    border-color: #ff9fc4;
+    background: rgba(35, 12, 46, 0.7);
+    box-shadow: 0 0 22px rgba(255, 127, 176, 0.75), inset 0 0 14px rgba(255, 127, 176, 0.25);
   }
 
   .press-start:focus-visible {
     outline: 2px solid #b98cff;
     outline-offset: 6px;
+  }
+
+  .press-start-text {
+    animation: blink 1.3s steps(1) infinite;
   }
 
   @keyframes blink {
@@ -174,7 +181,7 @@
       <div class="title-main">HOTEL<br>TRANSYLVANIA</div>
     </div>
 
-    <button class="press-start" type="button" aria-label="Press Start">PRESS START</button>
+    <button class="press-start" type="button" aria-label="Press Start"><span class="press-start-text">PRESS START</span></button>
 
     <div class="hint">Move: &larr; &rarr; / A D &nbsp;|&nbsp; Jump: Space / &uarr; / W</div>
     <div class="leaderboard">
