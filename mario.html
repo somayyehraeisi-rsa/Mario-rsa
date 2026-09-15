@@ -61,7 +61,7 @@
 <div id="gameWrap">
   <div id="title">MISS MARIO IN HOTEL TRANSYLVANIA &mdash; 10 LEVELS</div>
   <canvas id="game" width="800" height="480"></canvas>
-  <div id="hint">Move: ← → / A D &nbsp;|&nbsp; Jump: Space / ↑ / W &nbsp;|&nbsp; Stomp Goombas from above! &nbsp;|&nbsp; 10 levels, Easy → Extreme</div>
+  <div id="hint">Move: ← → / A D &nbsp;|&nbsp; Jump: Space / ↑ / W &nbsp;|&nbsp; Down: ↓ / S enters pipes &nbsp;|&nbsp; Stomp Goombas from above! &nbsp;|&nbsp; 10 levels, Easy → Extreme</div>
 </div>
 
 <script>
@@ -192,13 +192,23 @@
   // Input handling
   // ---------------------------------------------------------------------
   const keys = {};
-  const bind = { left: ['ArrowLeft', 'a', 'A'], right: ['ArrowRight', 'd', 'D'], jump: ['ArrowUp', 'w', 'W', ' '] };
+  const bind = {
+    left: ['ArrowLeft', 'a', 'A'],
+    right: ['ArrowRight', 'd', 'D'],
+    jump: ['ArrowUp', 'w', 'W', ' '],
+    down: ['ArrowDown', 's', 'S'],
+  };
 
-  // Jump is edge-triggered (one event per key press, not per held frame) so
-  // a second press while still airborne can be told apart from just holding
-  // the key down — that second press fuels the higher double-jump boost.
+  // Jump and Down are edge-triggered (one event per key press, not per held
+  // frame). For jump, that's what lets a second press while still airborne
+  // be told apart from just holding the key — it fuels the double-jump
+  // boost. For Down, it stops a warp from immediately re-triggering a warp
+  // back if the key is still held once the player lands inside the pipe
+  // it warped into.
   let jumpKeyDown = false;
   let jumpEdge = false;
+  let downKeyDown = false;
+  let downEdge = false;
 
   window.addEventListener('keydown', (e) => {
     keys[e.key] = true;
@@ -207,11 +217,16 @@
       if (!jumpKeyDown) jumpEdge = true;
       jumpKeyDown = true;
     }
+    if (bind.down.includes(e.key)) {
+      if (!downKeyDown) downEdge = true;
+      downKeyDown = true;
+    }
     if ((state.mode === 'gameover' || state.mode === 'victory') && (e.key === 'Enter' || e.key === ' ')) resetGame();
   });
   window.addEventListener('keyup', (e) => {
     keys[e.key] = false;
     if (bind.jump.includes(e.key)) jumpKeyDown = false;
+    if (bind.down.includes(e.key)) downKeyDown = false;
   });
 
   function isDown(action) { return bind[action].some(k => keys[k]); }
@@ -301,8 +316,31 @@
     for (let i = 0; i < mushroomCount; i++) {
       const seg = pickGroundSeg(150);
       const mx = seg.x + 50 + rand() * Math.max(1, seg.w - 100);
-      mushrooms.push({ x: mx, y: GROUND_Y - 24, taken: false });
+      mushrooms.push({ x: mx, y: GROUND_Y - 24, taken: false, popT: 0 });
     }
+
+    // Warp pipes: entrance anchored just past the player's spawn, exit
+    // anchored near the start of the level's last ground segment — always
+    // on solid ground since they're placed relative to segment starts
+    // rather than randomly. Standing on one and pressing Down teleports to
+    // its pair (and back).
+    const PIPE_W = 56, PIPE_H = 64;
+    const firstSeg = segments[0];
+    const lastSeg = segments[segments.length - 1];
+    const pipes = [
+      { x: firstSeg.x + 130, y: GROUND_Y, w: PIPE_W, h: PIPE_H, linkedTo: 1 },
+      { x: Math.max(firstSeg.x + 320, lastSeg.x + 40), y: GROUND_Y, w: PIPE_W, h: PIPE_H, linkedTo: 0 },
+    ];
+
+    // "?" boxes: jump into one from below to pop a mushroom out.
+    const boxes = [];
+    const boxCount = 1 + Math.floor(t * 1.5);
+    for (let i = 0; i < boxCount; i++) {
+      const seg = pickGroundSeg(180);
+      const bx = seg.x + 150 + rand() * Math.max(1, seg.w - 300);
+      boxes.push({ x: bx, y: GROUND_Y - 110, w: 28, h: 28, used: false, bumpT: 0 });
+    }
+    for (const b of boxes) solids.push(rect(b.x, b.y, b.w, b.h));
 
     // Enemies: ground mushrooms patrol within one ground segment; bats/ghosts
     // fly freely (including over pits) and get more common at higher levels.
@@ -329,7 +367,7 @@
       }
     }
 
-    return { width, solids, coins, mushrooms, enemies, flagX: width - 80 };
+    return { width, solids, coins, mushrooms, enemies, pipes, boxes, flagX: width - 80 };
   }
 
   // Night sky decoration (fixed field, twinkles over time), rebuilt per level
@@ -346,8 +384,20 @@
   let coins = [];
   let mushrooms = [];
   let enemies = [];
+  let pipes = [];
+  let boxes = [];
   let FLAG_X = 0;
   let STARS = [];
+
+  // Zone flavor names, keyed by level index — purely cosmetic, shown in the
+  // HUD alongside the level number so each stretch of the run feels like
+  // its own place even though the geometry is procedurally generated.
+  const ZONE_NAMES = [
+    'GRAVEYARD HALL', 'GRAVEYARD HALL',
+    'MOONLIT LIBRARY', 'MOONLIT LIBRARY',
+    'CRIMSON BALLROOM', 'CRIMSON BALLROOM', 'CRIMSON BALLROOM',
+    'HOTEL APPROACH', 'HOTEL APPROACH', 'HOTEL APPROACH',
+  ];
 
   // ---------------------------------------------------------------------
   // Player
@@ -362,6 +412,10 @@
       invuln: 1.0, // brief grace period so a spawn-point enemy can't chain-kill
       jumpsUsed: 0,
       animTime: 0,
+      warping: false,
+      warpT: 0,
+      warpTo: null,
+      big: false,
     };
   }
 
@@ -390,6 +444,8 @@
     coins = built.coins;
     mushrooms = built.mushrooms;
     enemies = built.enemies;
+    pipes = built.pipes;
+    boxes = built.boxes;
     FLAG_X = built.flagX;
     LEVEL_WIDTH = built.width;
     STARS = buildStars(LEVEL_WIDTH);
@@ -448,11 +504,56 @@
     }
   }
 
+  function findPipeUnder(p) {
+    const cx = p.x + p.w / 2;
+    return pipes.find(pp => cx >= pp.x && cx <= pp.x + pp.w && Math.abs((p.y + p.h) - pp.y) < 6);
+  }
+
+  function startWarp(pipe) {
+    const p = player;
+    p.warping = true;
+    p.warpT = 0.5;
+    p.warpTo = pipes[pipe.linkedTo];
+    p.vx = 0;
+    p.vy = 0;
+  }
+
+  function bumpBox(b) {
+    if (b.used) return;
+    b.used = true;
+    b.bumpT = 0.2;
+    mushrooms.push({
+      x: b.x + b.w / 2,
+      y: b.y - 16,
+      taken: false,
+      popT: 0.35,
+      popFromY: b.y + b.h / 2,
+    });
+  }
+
   // ---------------------------------------------------------------------
   // Update
   // ---------------------------------------------------------------------
   function updatePlayer(dt) {
     const p = player;
+
+    // --- Warp pipes: sink into the entrance, teleport, rise out of the
+    // linked pipe. Physics/input are suspended for the short animation. ---
+    if (p.warping) {
+      downEdge = false; // swallow any Down presses mid-animation
+      const wasSinking = p.warpT > 0.25;
+      p.warpT -= dt;
+      if (wasSinking && p.warpT <= 0.25 && p.warpTo) {
+        p.x = p.warpTo.x + p.warpTo.w / 2 - p.w / 2;
+        p.y = p.warpTo.y - p.h;
+        state.cameraX = Math.max(0, Math.min(LEVEL_WIDTH - VIEW_W, p.x + p.w / 2 - VIEW_W / 2));
+      }
+      if (p.warpT <= 0) {
+        p.warping = false;
+        p.onGround = true;
+      }
+      return;
+    }
 
     // --- Horizontal input / inertia ---
     const accel = p.onGround ? MOVE_ACCEL : AIR_ACCEL;
@@ -483,9 +584,30 @@
     p.vy += GRAVITY * dt;
     p.vy = Math.min(MAX_FALL_SPEED, p.vy);
 
+    const wasRising = p.vy < 0;
     moveAndCollide(p, p.vx * dt, p.vy * dt);
     p.onGround = p.onGroundThisFrame;
     if (p.onGround) p.jumpsUsed = 0;
+
+    // --- Question boxes: jumping into one's underside pops a mushroom ---
+    if (wasRising && p.vy === 0 && !p.onGroundThisFrame) {
+      for (const b of boxes) {
+        if (b.used) continue;
+        if (p.x + p.w > b.x && p.x < b.x + b.w && Math.abs(p.y - (b.y + b.h)) < 4) {
+          bumpBox(b);
+          break;
+        }
+      }
+    }
+
+    // --- Warp pipe: press Down while standing on a pipe's mouth ---
+    if (downEdge) {
+      downEdge = false;
+      if (p.onGround) {
+        const pipe = findPipeUnder(p);
+        if (pipe) startWarp(pipe);
+      }
+    }
 
     // --- Walk-cycle animation timer (idle at rest, cycles faster when running) ---
     if (p.onGround && Math.abs(p.vx) > 5) p.animTime += dt * (Math.abs(p.vx) / 90);
@@ -510,11 +632,15 @@
       if (aabbOverlap(p, cBox)) { c.taken = true; state.score += 100; }
     }
 
-    // --- Mushrooms ---
+    // --- Mushrooms (grow Miss Mario the first time one's eaten) ---
     for (const m of mushrooms) {
-      if (m.taken) continue;
+      if (m.taken || m.popT > 0) continue;
       const mBox = { x: m.x - 12, y: m.y - 12, w: 24, h: 24 };
-      if (aabbOverlap(p, mBox)) { m.taken = true; state.score += 500; }
+      if (aabbOverlap(p, mBox)) {
+        m.taken = true;
+        state.score += 500;
+        p.big = true;
+      }
     }
 
     // --- Enemies ---
@@ -535,8 +661,13 @@
         // knockback away from the enemy
         p.vx = (p.x < en.x ? -1 : 1) * 220;
         p.vy = -300;
-        respawnAfterDeath();
-        return;
+        if (p.big) {
+          // Big Miss Mario shrinks back down instead of losing a life
+          p.big = false;
+        } else {
+          respawnAfterDeath();
+          return;
+        }
       }
     }
 
@@ -608,7 +739,21 @@
       return;
     }
     updateEnemies(dt);
+    updateMushroomPops(dt);
+    updateBoxes(dt);
     updateCamera();
+  }
+
+  function updateMushroomPops(dt) {
+    for (const m of mushrooms) {
+      if (m.popT > 0) m.popT = Math.max(0, m.popT - dt);
+    }
+  }
+
+  function updateBoxes(dt) {
+    for (const b of boxes) {
+      if (b.bumpT > 0) b.bumpT = Math.max(0, b.bumpT - dt);
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -658,6 +803,22 @@
     }
     ctx.globalAlpha = 1;
 
+    // Hazy far-distance mountain range — the slowest-moving layer, giving
+    // the scene an extra plane of depth behind the windows/hotel.
+    const farParallax = state.cameraX * 0.08;
+    ctx.fillStyle = lerpColor('#3c2860', '#603030', dT).replace('rgb(', 'rgba(').slice(0, -1) + ', 0.35)';
+    for (let i = -1; i < 6; i++) {
+      const mx = i * 360 - (farParallax % 360);
+      ctx.beginPath();
+      ctx.moveTo(mx, GROUND_Y - 60);
+      ctx.lineTo(mx + 90, GROUND_Y - 190);
+      ctx.lineTo(mx + 190, GROUND_Y - 100);
+      ctx.lineTo(mx + 280, GROUND_Y - 220);
+      ctx.lineTo(mx + 380, GROUND_Y - 60);
+      ctx.closePath();
+      ctx.fill();
+    }
+
     // Repeating tall gothic windows with the moon showing through the glass,
     // a gargoyle perched on each stone ledge.
     const winParallax = state.cameraX * 0.35;
@@ -683,6 +844,16 @@
       ctx.stroke();
     }
 
+    // Wall-mounted torches, flame color warming from orange to red as the
+    // run gets more dangerous, spaced along the corridor.
+    const torchColor = lerpColor('#ff8a3d', '#ff4d6a', dT);
+    const torchSpacing = 260;
+    for (let i = -1; i < Math.ceil(VIEW_W / torchSpacing) + 2; i++) {
+      const wxWorld = Math.floor((state.cameraX + i * torchSpacing) / torchSpacing) * torchSpacing + torchSpacing / 2;
+      const tx = wxWorld - state.cameraX;
+      drawTorch(tx, GROUND_Y - 90, torchColor, t);
+    }
+
     // Drifting ground fog: purple at level 1, smoky red haze by level 10
     const parallax2 = state.cameraX * 0.5;
     ctx.fillStyle = `rgba(${Math.round(190 + dT * 40)}, ${Math.round(120 - dT * 70)}, ${Math.round(220 - dT * 170)}, 0.10)`;
@@ -691,6 +862,29 @@
       const fy = GROUND_Y - 30 - (i % 3) * 18;
       drawFogPatch(fx, fy);
     }
+  }
+
+  function drawTorch(x, y, flameColor, t) {
+    ctx.fillStyle = '#2a2030';
+    ctx.fillRect(x - 2, y, 4, 14);
+    ctx.fillStyle = '#1a1420';
+    ctx.beginPath();
+    ctx.ellipse(x, y, 5, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    const flicker = 0.75 + Math.abs(Math.sin(t * 9 + x)) * 0.25;
+    const glow = ctx.createRadialGradient(x, y - 6, 1, x, y - 6, 16 * flicker);
+    glow.addColorStop(0, flameColor.replace('rgb(', 'rgba(').slice(0, -1) + ', 0.9)');
+    glow.addColorStop(1, flameColor.replace('rgb(', 'rgba(').slice(0, -1) + ', 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(x, y - 6, 16 * flicker, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = flameColor;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 4);
+    ctx.quadraticCurveTo(x - 4 * flicker, y - 10, x, y - 16 * flicker);
+    ctx.quadraticCurveTo(x + 4 * flicker, y - 10, x, y - 4);
+    ctx.fill();
   }
 
   function drawGothicWindow(x, y, t) {
@@ -945,12 +1139,47 @@
       if (sx + s.w < 0 || sx > VIEW_W) continue;
 
       const isGround = s.y === GROUND_Y;
-      ctx.fillStyle = isGround ? '#453452' : '#523a5e';
+
+      // Soft, small cast shadow tucked right under a floating platform —
+      // narrower than the block and blurred, so it reads as a shadow, not
+      // as a second ledge stacked right underneath it.
+      if (!isGround) {
+        ctx.save();
+        ctx.filter = 'blur(3px)';
+        ctx.fillStyle = 'rgba(4, 2, 8, 0.4)';
+        ctx.beginPath();
+        ctx.ellipse(sx + s.w / 2, s.y + s.h + 5, s.w * 0.32, 3, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Front face: vertical gradient (moonlight catching the top, the
+      // block falling into shadow toward the bottom) instead of a flat fill.
+      const face = ctx.createLinearGradient(0, s.y, 0, s.y + s.h);
+      if (isGround) {
+        face.addColorStop(0, '#6b5a80');
+        face.addColorStop(0.18, '#4c3a5a');
+        face.addColorStop(1, '#291f38');
+      } else {
+        face.addColorStop(0, '#7a4f8a');
+        face.addColorStop(0.18, '#5a3d68');
+        face.addColorStop(1, '#301f3c');
+      }
+      ctx.fillStyle = face;
       ctx.fillRect(sx, s.y, s.w, s.h);
-      // top highlight strip: worn stone / mortar tint
-      ctx.fillStyle = isGround ? '#6b5a80' : '#7a4f8a';
-      ctx.fillRect(sx, s.y, s.w, 8);
-      // cracked texture
+
+      // Lit top edge (the actual walkable surface catching the moonlight)
+      ctx.fillStyle = isGround ? '#8a7aa0' : '#9a6cae';
+      ctx.fillRect(sx, s.y, s.w, 4);
+
+      // Left edge catches a little light, right edge falls into shadow —
+      // reads as a subtle extrusion/bevel on the block.
+      ctx.fillStyle = 'rgba(255,255,255,0.10)';
+      ctx.fillRect(sx, s.y + 4, 3, s.h - 4);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fillRect(sx + s.w - 4, s.y + 4, 4, s.h - 4);
+
+      // cracked mortar texture
       ctx.strokeStyle = 'rgba(0,0,0,0.4)';
       ctx.lineWidth = 1;
       for (let bx = 0; bx < s.w; bx += 20) {
@@ -958,6 +1187,133 @@
         ctx.moveTo(sx + bx, s.y + 8);
         ctx.lineTo(sx + bx, s.y + s.h);
         ctx.stroke();
+      }
+    }
+  }
+
+  // Finds the y of the nearest solid surface directly beneath world-x
+  // `wx` (the highest/topmost one, i.e. smallest y). Returns null when
+  // there is nothing below (an open pit) — used to fade out contact
+  // shadows over the slime pool instead of drawing them on nothing.
+  function findGroundY(wx) {
+    let best = null;
+    for (const s of solids) {
+      if (wx < s.x || wx > s.x + s.w) continue;
+      if (best === null || s.y < best) best = s.y;
+    }
+    return best;
+  }
+
+  // A soft squashed ellipse cast onto the surface below an entity — the
+  // single biggest cue for "this thing is a solid object above a floor"
+  // rather than a flat sprite floating on a flat background.
+  function drawContactShadow(worldX, entityBottomY, halfWidth) {
+    const gy = findGroundY(worldX);
+    if (gy === null) return;
+    const dist = Math.max(0, gy - entityBottomY);
+    const scale = Math.max(0, 1 - dist / 200);
+    if (scale <= 0.03) return;
+    const sx = worldX - state.cameraX;
+    ctx.fillStyle = `rgba(3, 1, 6, ${0.4 * scale})`;
+    ctx.beginPath();
+    ctx.ellipse(sx, gy - 1, halfWidth * (0.5 + scale * 0.5), 4 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawShadows() {
+    for (const en of enemies) {
+      if (!en.alive) continue;
+      drawContactShadow(en.x + en.w / 2, en.y + en.h, en.w / 2);
+    }
+    drawContactShadow(player.x + player.w / 2, player.y + player.h, player.w / 2);
+  }
+
+  function drawPipes(t) {
+    for (const pp of pipes) {
+      const sx = pp.x - state.cameraX;
+      if (sx + pp.w < -20 || sx > VIEW_W + 20) continue;
+
+      const top = pp.y - pp.h;
+      const lipH = 16;
+
+      ctx.fillStyle = 'rgba(3, 1, 6, 0.4)';
+      ctx.beginPath();
+      ctx.ellipse(sx + pp.w / 2, pp.y + 3, pp.w / 2 + 4, 5, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      const bodyGrad = ctx.createLinearGradient(sx, 0, sx + pp.w, 0);
+      bodyGrad.addColorStop(0, '#0e5c28');
+      bodyGrad.addColorStop(0.22, '#2fae52');
+      bodyGrad.addColorStop(0.5, '#3fd66a');
+      bodyGrad.addColorStop(0.78, '#1f8a3e');
+      bodyGrad.addColorStop(1, '#0a4a20');
+      ctx.fillStyle = bodyGrad;
+      ctx.fillRect(sx + 4, top + lipH, pp.w - 8, pp.h - lipH);
+
+      ctx.fillStyle = bodyGrad;
+      ctx.fillRect(sx, top, pp.w, lipH);
+      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      ctx.fillRect(sx, top, pp.w, 3);
+
+      ctx.strokeStyle = '#062f14';
+      ctx.lineWidth = 2.5;
+      ctx.strokeRect(sx + 1, top + 1, pp.w - 2, lipH - 2);
+      ctx.strokeRect(sx + 5, top + lipH, pp.w - 10, pp.h - lipH - 1);
+
+      ctx.fillStyle = 'rgba(255,255,255,0.22)';
+      ctx.fillRect(sx + 10, top + lipH + 4, 5, pp.h - lipH - 8);
+
+      ctx.fillStyle = '#031006';
+      ctx.beginPath();
+      ctx.ellipse(sx + pp.w / 2, top + lipH / 2, pp.w / 2 - 5, lipH / 2 - 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      const cx = player.x + player.w / 2;
+      const onThisPipe = player.onGround && !player.warping &&
+        cx >= pp.x && cx <= pp.x + pp.w && Math.abs((player.y + player.h) - pp.y) < 6;
+      if (onThisPipe) {
+        const bob = Math.sin(t * 5) * 3;
+        ctx.fillStyle = 'rgba(230, 255, 230, 0.9)';
+        ctx.font = 'bold 12px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('▼', sx + pp.w / 2, top - 8 + bob);
+        ctx.textAlign = 'left';
+      }
+    }
+  }
+
+  function drawBoxes() {
+    for (const b of boxes) {
+      const sx = b.x - state.cameraX;
+      if (sx + b.w < -20 || sx > VIEW_W + 20) continue;
+      const bounce = b.bumpT > 0 ? -Math.sin((b.bumpT / 0.2) * Math.PI) * 6 : 0;
+      const by = b.y + bounce;
+
+      if (b.used) {
+        const grad = ctx.createLinearGradient(0, by, 0, by + b.h);
+        grad.addColorStop(0, '#6b5240');
+        grad.addColorStop(1, '#3a2a20');
+        ctx.fillStyle = grad;
+        ctx.fillRect(sx, by, b.w, b.h);
+        ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(sx + 1, by + 1, b.w - 2, b.h - 2);
+      } else {
+        const grad = ctx.createLinearGradient(0, by, 0, by + b.h);
+        grad.addColorStop(0, '#ffd23f');
+        grad.addColorStop(1, '#b8860b');
+        ctx.fillStyle = grad;
+        ctx.fillRect(sx, by, b.w, b.h);
+        ctx.strokeStyle = '#5c4108';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(sx + 1, by + 1, b.w - 2, b.h - 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
+        ctx.fillRect(sx + 2, by + 2, b.w - 4, 3);
+        ctx.fillStyle = '#5c4108';
+        ctx.font = 'bold 16px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('?', sx + b.w / 2, by + b.h / 2 + 1);
       }
     }
   }
@@ -973,14 +1329,23 @@
       ctx.scale(0.3 + squish * 0.7, 1);
       ctx.shadowColor = '#8a6a12';
       ctx.shadowBlur = 12;
+      const coinGrad = ctx.createRadialGradient(-3, -3, 1, 0, 0, 11);
+      coinGrad.addColorStop(0, '#f0c95c');
+      coinGrad.addColorStop(0.5, '#b8860b');
+      coinGrad.addColorStop(1, '#7a5608');
       ctx.beginPath();
-      ctx.fillStyle = '#b8860b';
+      ctx.fillStyle = coinGrad;
       ctx.arc(0, 0, 10, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
       ctx.strokeStyle = '#5c4108';
       ctx.lineWidth = 2;
       ctx.stroke();
+      // glossy highlight streak
+      ctx.fillStyle = 'rgba(255, 245, 210, 0.75)';
+      ctx.beginPath();
+      ctx.ellipse(-3, -4, 3, 5, -0.4, 0, Math.PI * 2);
+      ctx.fill();
       ctx.restore();
     }
   }
@@ -990,23 +1355,31 @@
       if (m.taken) continue;
       const mx = m.x - state.cameraX;
       if (mx < -24 || mx > VIEW_W + 24) continue;
+
+      // Freshly-bumped mushrooms rise up out of their box over popT seconds.
+      let my = m.y;
+      if (m.popT > 0) {
+        const localT = 1 - m.popT / 0.35;
+        my = m.popFromY + (m.y - m.popFromY) * localT;
+      }
+
       // stem
       ctx.fillStyle = '#f5e9d8';
-      ctx.fillRect(mx - 7, m.y, 14, 12);
+      ctx.fillRect(mx - 7, my, 14, 12);
       // cap: cheerful candy-pink power mushroom
       ctx.shadowColor = '#ff4fa0';
       ctx.shadowBlur = 10;
       ctx.fillStyle = '#ff4fa0';
       ctx.beginPath();
-      ctx.arc(mx, m.y, 13, Math.PI, 0);
+      ctx.arc(mx, my, 13, Math.PI, 0);
       ctx.fill();
       ctx.shadowBlur = 0;
       // white spots
       ctx.fillStyle = '#fff';
       ctx.beginPath();
-      ctx.arc(mx - 6, m.y - 5, 3, 0, Math.PI * 2);
-      ctx.arc(mx + 6, m.y - 5, 3, 0, Math.PI * 2);
-      ctx.arc(mx, m.y - 10, 2.5, 0, Math.PI * 2);
+      ctx.arc(mx - 6, my - 5, 3, 0, Math.PI * 2);
+      ctx.arc(mx + 6, my - 5, 3, 0, Math.PI * 2);
+      ctx.arc(mx, my - 10, 2.5, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -1041,8 +1414,12 @@
     ctx.fillRect(ex + 4, top + h - 6, 8, 6);
     ctx.fillRect(ex + w - 12, top + h - 6, 8, 6);
 
-    // angry spotted cap
-    ctx.fillStyle = '#6a2d8f';
+    // angry spotted cap — domed gradient for volume
+    const capGrad = ctx.createRadialGradient(cx - w * 0.15, top + h * 0.42 - w * 0.2, 1, cx, top + h * 0.42, w * 0.55);
+    capGrad.addColorStop(0, '#9a5cc8');
+    capGrad.addColorStop(0.6, '#6a2d8f');
+    capGrad.addColorStop(1, '#3c1656');
+    ctx.fillStyle = capGrad;
     ctx.beginPath();
     ctx.arc(cx, top + h * 0.42, w / 2, Math.PI, 0);
     ctx.fill();
@@ -1092,7 +1469,11 @@
     ctx.quadraticCurveTo(cx + 12, cy + 2, cx, cy + 6);
     ctx.closePath();
     ctx.fill();
-    // body
+    // body — small radial highlight so it doesn't read as a flat silhouette
+    const batGrad = ctx.createRadialGradient(cx - 2, cy - 2, 0.5, cx, cy, 8);
+    batGrad.addColorStop(0, '#3a2650');
+    batGrad.addColorStop(1, '#170a22');
+    ctx.fillStyle = batGrad;
     ctx.beginPath();
     ctx.ellipse(cx, cy, 7, 8, 0, 0, Math.PI * 2);
     ctx.fill();
@@ -1144,16 +1525,29 @@
     ctx.shadowBlur = 0;
   }
 
+  function warpSquish(p) {
+    if (!p.warping) return 1;
+    if (p.warpT > 0.25) {
+      const local = (p.warpT - 0.25) / 0.25; // 1 -> 0 while sinking into the old pipe
+      return 0.15 + local * 0.85;
+    }
+    const local = p.warpT / 0.25; // 1 -> 0 while rising out of the new pipe
+    return 1 - local * 0.85;
+  }
+
   function drawPlayer() {
     const p = player;
     // Flash while invulnerable
     if (p.invuln > 0 && Math.floor(p.invuln * 12) % 2 === 0) return;
 
     const px = p.x - state.cameraX;
+    const squish = warpSquish(p);
+    const grow = p.big ? 1.35 : 1; // after eating a mushroom, drawn taller but feet stay planted
     ctx.save();
-    ctx.translate(px + p.w / 2, 0);
-    ctx.scale(p.facing, 1);
-    ctx.translate(-p.w / 2, 0);
+    ctx.translate(px + p.w / 2, p.y + p.h);
+    ctx.scale(p.facing, squish);
+    ctx.scale(grow, grow);
+    ctx.translate(-p.w / 2, -(p.y + p.h));
 
     if (imageReady(SPRITES.playerWalk)) {
       const sheet = SPRITES.playerWalk;
@@ -1241,12 +1635,15 @@
       20, 46
     );
 
-    // Progress, small, top-center
+    // Progress + zone flavor name, small, top-center
     const pct = Math.round(Math.min(100, (player.x / (FLAG_X)) * 100));
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
     ctx.font = 'bold 13px monospace';
     ctx.textAlign = 'center';
     ctx.fillText(pct + '%', VIEW_W / 2, 22);
+    ctx.fillStyle = 'rgba(255, 159, 196, 0.85)';
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText(ZONE_NAMES[state.currentLevel], VIEW_W / 2, 38);
 
     // Portrait nameplate (top-right)
     const boxW = 150, boxH = 34, boxX = VIEW_W - boxW - 14, boxY = 8;
@@ -1351,6 +1748,9 @@
     drawBackground(t);
     drawSlimePool(t);
     drawSolids();
+    drawBoxes();
+    drawPipes(t);
+    drawShadows();
     drawMushrooms();
     drawCoins(t);
     drawFlag();
