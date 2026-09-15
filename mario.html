@@ -262,14 +262,41 @@
     { x: 3180, y: 210, taken: false },
   ];
 
-  const mushrooms = [
-    { x: 500, y: GROUND_Y - 24, taken: false },
-    { x: 1600, y: 290, taken: false },
-    { x: 2450, y: GROUND_Y - 24 - 300 + 300, taken: false }, // sits on ground segment
-    { x: 3000, y: 310, taken: false },
+  function initialMushrooms() {
+    return [
+      { x: 500, y: GROUND_Y - 24, taken: false, popT: 0 },
+      { x: 1600, y: 290, taken: false, popT: 0 },
+      { x: 2500, y: GROUND_Y - 24, taken: false, popT: 0 }, // sits on ground segment 3
+      { x: 3000, y: 310, taken: false, popT: 0 },
+    ];
+  }
+  let mushrooms = initialMushrooms();
+
+  // "?" question boxes: bump one from below (jump into its underside) to pop
+  // a mushroom out. Solid like a platform, so they also double as a place
+  // to stand once used.
+  function makeBox(x, y) { return { x, y, w: 28, h: 28, used: false, bumpT: 0 }; }
+  const boxes = [
+    makeBox(250, 340),
+    makeBox(1400, 300),
+    makeBox(2600, 280),
   ];
-  // fix mushroom that should sit on ground segment 3 (x 1860-2760)
-  mushrooms[2] = { x: 2500, y: GROUND_Y - 24, taken: false };
+  // Boxes are solid geometry from the start (standable/bumpable) regardless
+  // of whether they've been used yet.
+  for (const b of boxes) solids.push({ x: b.x, y: b.y, w: b.w, h: b.h });
+
+  function bumpBox(b) {
+    if (b.used) return;
+    b.used = true;
+    b.bumpT = 0.2;
+    mushrooms.push({
+      x: b.x + b.w / 2,
+      y: b.y - 16,
+      taken: false,
+      popT: 0.35,
+      popFromY: b.y + b.h / 2,
+    });
+  }
 
   function makeEnemy(x, y, patrolMin, patrolMax, kind) {
     return {
@@ -292,6 +319,49 @@
   ]);
 
   const FLAG_X = LEVEL_WIDTH - 80;
+
+  // ---------------------------------------------------------------------
+  // Zones: the level is split into a few stretches, each with its own
+  // background palette, so it doesn't feel like one flat unchanging scene
+  // the whole way through. Colors blend smoothly between zone midpoints.
+  // ---------------------------------------------------------------------
+  const ZONES = [
+    { end: 900,          sky: ['#140c24', '#241536', '#3d2350'], fog: '190,120,220', mnt: '60,40,90',  wall: '#1e1430', flame: '#ff8a3d', name: 'GRAVEYARD HALL' },
+    { end: 1800,         sky: ['#0b1524', '#122a3c', '#1f4258'], fog: '110,170,210', mnt: '40,75,105', wall: '#16283a', flame: '#6fd0ff', name: 'MOONLIT LIBRARY' },
+    { end: 2700,         sky: ['#230c16', '#3c1424', '#5c1c30'], fog: '220,90,110',  mnt: '95,35,50',  wall: '#3a1420', flame: '#ff4d6a', name: 'CRIMSON BALLROOM' },
+    { end: LEVEL_WIDTH,  sky: ['#1f0f1c', '#3a1830', '#5c2444'], fog: '230,150,120', mnt: '95,55,65',  wall: '#3a1830', flame: '#ffd27a', name: 'HOTEL APPROACH' },
+  ];
+
+  function hexToRgb(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  function lerpColor(a, b, t) {
+    const ca = hexToRgb(a), cb = hexToRgb(b);
+    const r = Math.round(ca[0] + (cb[0] - ca[0]) * t);
+    const g = Math.round(ca[1] + (cb[1] - ca[1]) * t);
+    const bl = Math.round(ca[2] + (cb[2] - ca[2]) * t);
+    return `rgb(${r},${g},${bl})`;
+  }
+
+  function currentPalette(worldX) {
+    const starts = ZONES.map((z, i) => (i === 0 ? 0 : ZONES[i - 1].end));
+    const mids = ZONES.map((z, i) => (starts[i] + z.end) / 2);
+    let i = 0;
+    while (i < mids.length - 1 && worldX > mids[i + 1]) i++;
+    const j = Math.min(i + 1, ZONES.length - 1);
+    const a = ZONES[i], b = ZONES[j];
+    const span = mids[j] - mids[i] || 1;
+    const t = Math.max(0, Math.min(1, (worldX - mids[i]) / span));
+    return {
+      sky: [lerpColor(a.sky[0], b.sky[0], t), lerpColor(a.sky[1], b.sky[1], t), lerpColor(a.sky[2], b.sky[2], t)],
+      fog: t < 0.5 ? a.fog : b.fog,
+      mnt: t < 0.5 ? a.mnt : b.mnt,
+      wall: lerpColor(a.wall, b.wall, t),
+      flame: t < 0.5 ? a.flame : b.flame,
+      name: t < 0.5 ? a.name : b.name,
+    };
+  }
 
   // ---------------------------------------------------------------------
   // Night sky decoration (fixed field, twinkles over time)
@@ -318,6 +388,7 @@
       warping: false,
       warpT: 0,
       warpTo: null,
+      big: false,
     };
   }
 
@@ -340,7 +411,8 @@
     player = makePlayer();
     enemies = enemiesInit();
     coins.forEach(c => c.taken = false);
-    mushrooms.forEach(m => m.taken = false);
+    mushrooms = initialMushrooms();
+    boxes.forEach(b => { b.used = false; b.bumpT = 0; });
     state.mode = 'playing';
     state.score = 0;
     state.lives = 3;
@@ -454,9 +526,21 @@
     p.vy += GRAVITY * dt;
     p.vy = Math.min(MAX_FALL_SPEED, p.vy);
 
+    const wasRising = p.vy < 0;
     moveAndCollide(p, p.vx * dt, p.vy * dt);
     p.onGround = p.onGroundThisFrame;
     if (p.onGround) p.jumpsUsed = 0;
+
+    // --- Question boxes: jumping into one's underside pops a mushroom ---
+    if (wasRising && p.vy === 0 && !p.onGroundThisFrame) {
+      for (const b of boxes) {
+        if (b.used) continue;
+        if (p.x + p.w > b.x && p.x < b.x + b.w && Math.abs(p.y - (b.y + b.h)) < 4) {
+          bumpBox(b);
+          break;
+        }
+      }
+    }
 
     // --- Warp pipe: press Down while standing on a pipe's mouth ---
     if (downEdge) {
@@ -486,11 +570,15 @@
       if (aabbOverlap(p, cBox)) { c.taken = true; state.score += 100; }
     }
 
-    // --- Mushrooms ---
+    // --- Mushrooms (grow Miss Mario the first time one's eaten) ---
     for (const m of mushrooms) {
-      if (m.taken) continue;
+      if (m.taken || m.popT > 0) continue;
       const mBox = { x: m.x - 12, y: m.y - 12, w: 24, h: 24 };
-      if (aabbOverlap(p, mBox)) { m.taken = true; state.score += 500; }
+      if (aabbOverlap(p, mBox)) {
+        m.taken = true;
+        state.score += 500;
+        p.big = true;
+      }
     }
 
     // --- Enemies ---
@@ -511,8 +599,13 @@
         // knockback away from the enemy
         p.vx = (p.x < en.x ? -1 : 1) * 220;
         p.vy = -300;
-        respawnAfterDeath();
-        return;
+        if (p.big) {
+          // Big Miss Mario shrinks back down instead of losing a life
+          p.big = false;
+        } else {
+          respawnAfterDeath();
+          return;
+        }
       }
     }
 
@@ -568,18 +661,36 @@
       return;
     }
     updateEnemies(dt);
+    updateMushroomPops(dt);
+    updateBoxes(dt);
     updateCamera();
+  }
+
+  function updateMushroomPops(dt) {
+    for (const m of mushrooms) {
+      if (m.popT > 0) m.popT = Math.max(0, m.popT - dt);
+    }
+  }
+
+  function updateBoxes(dt) {
+    for (const b of boxes) {
+      if (b.bumpT > 0) b.bumpT = Math.max(0, b.bumpT - dt);
+    }
   }
 
   // ---------------------------------------------------------------------
   // Drawing
   // ---------------------------------------------------------------------
   function drawBackground(t) {
-    // Castle-hall gradient: deep indigo stone fading to a violet haze low down
+    const pal = currentPalette(state.cameraX + VIEW_W / 2);
+
+    // Castle-hall gradient: deep indigo stone fading to a violet haze low
+    // down — recolored per zone so each stretch of the level reads as its
+    // own room instead of one continuous unchanging backdrop.
     const sky = ctx.createLinearGradient(0, 0, 0, VIEW_H);
-    sky.addColorStop(0, '#140c24');
-    sky.addColorStop(0.5, '#241536');
-    sky.addColorStop(1, '#3d2350');
+    sky.addColorStop(0, pal.sky[0]);
+    sky.addColorStop(0.5, pal.sky[1]);
+    sky.addColorStop(1, pal.sky[2]);
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
@@ -601,7 +712,7 @@
     // Hazy far-distance mountain range — the slowest-moving layer, giving
     // the scene an extra plane of depth behind the windows/hotel.
     const farParallax = state.cameraX * 0.08;
-    ctx.fillStyle = 'rgba(60, 40, 90, 0.35)';
+    ctx.fillStyle = `rgba(${pal.mnt}, 0.35)`;
     for (let i = -1; i < 6; i++) {
       const mx = i * 360 - (farParallax % 360);
       ctx.beginPath();
@@ -628,7 +739,7 @@
 
     // Distant brick wall texture band above the platforms
     const parallax = state.cameraX * 0.3;
-    ctx.fillStyle = '#1e1430';
+    ctx.fillStyle = pal.wall;
     ctx.fillRect(0, GROUND_Y - 70, VIEW_W, 70);
     ctx.strokeStyle = 'rgba(0,0,0,0.35)';
     ctx.lineWidth = 1;
@@ -639,14 +750,47 @@
       ctx.stroke();
     }
 
-    // Drifting purple ground fog
+    // Wall-mounted torches, flame color tinted per zone, spaced along the hall
+    const torchSpacing = 260;
+    for (let i = -1; i < Math.ceil(VIEW_W / torchSpacing) + 2; i++) {
+      const wxWorld = Math.floor((state.cameraX + i * torchSpacing) / torchSpacing) * torchSpacing + torchSpacing / 2;
+      const tx = wxWorld - state.cameraX;
+      drawTorch(tx, GROUND_Y - 90, currentPalette(wxWorld).flame, t);
+    }
+
+    // Drifting ground fog, tinted per zone
     const parallax2 = state.cameraX * 0.5;
-    ctx.fillStyle = 'rgba(190, 120, 220, 0.10)';
+    ctx.fillStyle = `rgba(${pal.fog}, 0.10)`;
     for (let i = -1; i < 8; i++) {
       const fx = i * 300 - (parallax2 % 300) + Math.sin(t * 0.3 + i) * 12;
       const fy = GROUND_Y - 30 - (i % 3) * 18;
       drawFogPatch(fx, fy);
     }
+  }
+
+  function drawTorch(x, y, flameColor, t) {
+    // bracket
+    ctx.fillStyle = '#2a2030';
+    ctx.fillRect(x - 2, y, 4, 14);
+    ctx.fillStyle = '#1a1420';
+    ctx.beginPath();
+    ctx.ellipse(x, y, 5, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // flickering flame glow
+    const flicker = 0.75 + Math.abs(Math.sin(t * 9 + x)) * 0.25;
+    const glow = ctx.createRadialGradient(x, y - 6, 1, x, y - 6, 16 * flicker);
+    glow.addColorStop(0, flameColor + 'e6');
+    glow.addColorStop(1, flameColor + '00');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(x, y - 6, 16 * flicker, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = flameColor;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 4);
+    ctx.quadraticCurveTo(x - 4 * flicker, y - 10, x, y - 16 * flicker);
+    ctx.quadraticCurveTo(x + 4 * flicker, y - 10, x, y - 4);
+    ctx.fill();
   }
 
   function drawGothicWindow(x, y, t) {
@@ -900,14 +1044,17 @@
 
       const isGround = s.y === GROUND_Y;
 
-      // Soft cast shadow on whatever is behind/below a floating platform,
-      // and an ambient-occlusion strip under ground tiles — both read as
-      // depth cues that a flat fill can't give.
+      // Soft, small cast shadow tucked right under a floating platform —
+      // narrower than the block and blurred, so it reads as a shadow, not
+      // as a second ledge stacked right underneath it.
       if (!isGround) {
-        ctx.fillStyle = 'rgba(4, 2, 8, 0.35)';
+        ctx.save();
+        ctx.filter = 'blur(3px)';
+        ctx.fillStyle = 'rgba(4, 2, 8, 0.4)';
         ctx.beginPath();
-        ctx.ellipse(sx + s.w / 2, s.y + s.h + 10, s.w / 2, 6, 0, 0, Math.PI * 2);
+        ctx.ellipse(sx + s.w / 2, s.y + s.h + 5, s.w * 0.32, 3, 0, 0, Math.PI * 2);
         ctx.fill();
+        ctx.restore();
       }
 
       // Front face: vertical gradient (moonlight catching the top, the
@@ -1083,24 +1230,68 @@
       if (m.taken) continue;
       const mx = m.x - state.cameraX;
       if (mx < -24 || mx > VIEW_W + 24) continue;
+
+      // Freshly-bumped mushrooms rise up out of their box over popT seconds.
+      let my = m.y;
+      if (m.popT > 0) {
+        const localT = 1 - m.popT / 0.35; // 0 -> 1 as it rises
+        my = m.popFromY + (m.y - m.popFromY) * localT;
+      }
+
       // stem
       ctx.fillStyle = '#f5e9d8';
-      ctx.fillRect(mx - 7, m.y, 14, 12);
+      ctx.fillRect(mx - 7, my, 14, 12);
       // cap: cheerful candy-pink power mushroom
       ctx.shadowColor = '#ff4fa0';
       ctx.shadowBlur = 10;
       ctx.fillStyle = '#ff4fa0';
       ctx.beginPath();
-      ctx.arc(mx, m.y, 13, Math.PI, 0);
+      ctx.arc(mx, my, 13, Math.PI, 0);
       ctx.fill();
       ctx.shadowBlur = 0;
       // white spots
       ctx.fillStyle = '#fff';
       ctx.beginPath();
-      ctx.arc(mx - 6, m.y - 5, 3, 0, Math.PI * 2);
-      ctx.arc(mx + 6, m.y - 5, 3, 0, Math.PI * 2);
-      ctx.arc(mx, m.y - 10, 2.5, 0, Math.PI * 2);
+      ctx.arc(mx - 6, my - 5, 3, 0, Math.PI * 2);
+      ctx.arc(mx + 6, my - 5, 3, 0, Math.PI * 2);
+      ctx.arc(mx, my - 10, 2.5, 0, Math.PI * 2);
       ctx.fill();
+    }
+  }
+
+  function drawBoxes() {
+    for (const b of boxes) {
+      const sx = b.x - state.cameraX;
+      if (sx + b.w < -20 || sx > VIEW_W + 20) continue;
+      const bounce = b.bumpT > 0 ? -Math.sin((b.bumpT / 0.2) * Math.PI) * 6 : 0;
+      const by = b.y + bounce;
+
+      if (b.used) {
+        const grad = ctx.createLinearGradient(0, by, 0, by + b.h);
+        grad.addColorStop(0, '#6b5240');
+        grad.addColorStop(1, '#3a2a20');
+        ctx.fillStyle = grad;
+        ctx.fillRect(sx, by, b.w, b.h);
+        ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(sx + 1, by + 1, b.w - 2, b.h - 2);
+      } else {
+        const grad = ctx.createLinearGradient(0, by, 0, by + b.h);
+        grad.addColorStop(0, '#ffd23f');
+        grad.addColorStop(1, '#b8860b');
+        ctx.fillStyle = grad;
+        ctx.fillRect(sx, by, b.w, b.h);
+        ctx.strokeStyle = '#5c4108';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(sx + 1, by + 1, b.w - 2, b.h - 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
+        ctx.fillRect(sx + 2, by + 2, b.w - 4, 3);
+        ctx.fillStyle = '#5c4108';
+        ctx.font = 'bold 16px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('?', sx + b.w / 2, by + b.h / 2 + 1);
+      }
     }
   }
 
@@ -1287,9 +1478,11 @@
 
     const px = p.x - state.cameraX;
     const squish = warpSquish(p);
+    const grow = p.big ? 1.35 : 1; // after eating a mushroom, drawn taller but feet stay planted
     ctx.save();
     ctx.translate(px + p.w / 2, p.y + p.h);
     ctx.scale(p.facing, squish);
+    ctx.scale(grow, grow);
     ctx.translate(-p.w / 2, -(p.y + p.h));
 
     // Legs: white stockings + shaded red boots
@@ -1472,12 +1665,15 @@
     ctx.textAlign = 'left';
     ctx.fillText(state.score + ' G', 124, 23);
 
-    // Progress, small, top-center
+    // Progress + current zone name, small, top-center
     const pct = Math.round(Math.min(100, (player.x / (FLAG_X)) * 100));
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
     ctx.font = 'bold 13px monospace';
     ctx.textAlign = 'center';
     ctx.fillText(pct + '%', VIEW_W / 2, 22);
+    ctx.fillStyle = 'rgba(255, 159, 196, 0.85)';
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText(currentPalette(player.x).name, VIEW_W / 2, 38);
 
     // Portrait nameplate (top-right)
     const boxW = 150, boxH = 34, boxX = VIEW_W - boxW - 14, boxY = 8;
@@ -1561,6 +1757,7 @@
     drawBackground(t);
     drawSlimePool(t);
     drawSolids();
+    drawBoxes();
     drawPipes(t);
     drawShadows();
     drawMushrooms();
