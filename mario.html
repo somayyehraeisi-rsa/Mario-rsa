@@ -59,9 +59,9 @@
 <body>
 
 <div id="gameWrap">
-  <div id="title">MISS MARIO IN HOTEL TRANSYLVANIA</div>
+  <div id="title">MISS MARIO IN HOTEL TRANSYLVANIA &mdash; 10 LEVELS</div>
   <canvas id="game" width="800" height="480"></canvas>
-  <div id="hint">Move: ← → / A D &nbsp;|&nbsp; Jump: Space / ↑ / W &nbsp;|&nbsp; Down: ↓ / S enters pipes &nbsp;|&nbsp; Stomp Goombas from above!</div>
+  <div id="hint">Move: ← → / A D &nbsp;|&nbsp; Jump: Space / ↑ / W &nbsp;|&nbsp; Down: ↓ / S enters pipes &nbsp;|&nbsp; Stomp Goombas from above! &nbsp;|&nbsp; 10 levels, Easy → Extreme</div>
 </div>
 
 <script>
@@ -100,6 +100,22 @@
   }
   window.addEventListener('resize', layoutCanvas);
   layoutCanvas();
+
+  // ---------------------------------------------------------------------
+  // Sprite art (walk sheet is a horizontal strip of PLAYER_FRAME_COUNT
+  // equal, bottom-aligned frames: idle, walk-a, walk-b, jump)
+  // ---------------------------------------------------------------------
+  const PLAYER_FRAME_COUNT = 4;
+  const SPRITES = {
+    playerWalk: new Image(),
+    ghost: new Image(),
+  };
+  SPRITES.playerWalk.src = 'assets/miss-mario-walk.png';
+  SPRITES.ghost.src = 'assets/enemy-ghost.png';
+
+  function imageReady(img) {
+    return img.complete && img.naturalWidth > 0;
+  }
 
   // ---------------------------------------------------------------------
   // Supabase leaderboard (public anon key — safe to expose client-side,
@@ -162,9 +178,15 @@
   const ENEMY_SPEED = 80;
   const INVULN_TIME = 1.5;       // seconds of flashing invulnerability after a hit
 
-  const LEVEL_WIDTH = 3400;
+  let LEVEL_WIDTH = 2200;        // recomputed per level by buildLevel()
   const GROUND_Y = 440;          // top surface of ground tiles
   const KILL_Y = 620;            // fall past this = death (pit)
+
+  const LEVEL_COUNT = 10;
+  const DIFFICULTY_NAMES = [
+    'Very Easy', 'Easy', 'Easy', 'Medium', 'Medium',
+    'Hard', 'Hard', 'Very Hard', 'Very Hard', 'Extreme',
+  ];
 
   // ---------------------------------------------------------------------
   // Input handling
@@ -199,7 +221,7 @@
       if (!downKeyDown) downEdge = true;
       downKeyDown = true;
     }
-    if (state.mode !== 'playing' && (e.key === 'Enter' || e.key === ' ')) resetGame();
+    if ((state.mode === 'gameover' || state.mode === 'victory') && (e.key === 'Enter' || e.key === ' ')) resetGame();
   });
   window.addEventListener('keyup', (e) => {
     keys[e.key] = false;
@@ -214,94 +236,10 @@
   // ---------------------------------------------------------------------
   function rect(x, y, w, h) { return { x, y, w, h }; }
 
-  const solids = [
-    // Ground segments, broken up by two pits for a bit of risk/reward
-    rect(0, GROUND_Y, 900, 40),
-    rect(980, GROUND_Y, 820, 40),
-    rect(1860, GROUND_Y, 900, 40),
-    rect(2820, GROUND_Y, LEVEL_WIDTH - 2820, 40),
-
-    // Floating platforms
-    rect(300, 330, 120, 24),
-    rect(520, 260, 100, 24),
-    rect(760, 340, 140, 24),
-    rect(1120, 350, 110, 24),
-    rect(1300, 260, 90, 24),
-    rect(1550, 320, 130, 24),
-    rect(2000, 340, 120, 24),
-    rect(2200, 260, 100, 24),
-    rect(2420, 350, 140, 24),
-    rect(2680, 300, 100, 24),
-    rect(2980, 340, 140, 24),
-    rect(3150, 250, 120, 24),
-  ];
-
-  // Warp pipes: standing on one and pressing Down teleports to its pair.
-  // A classic Mario shortcut — hop into pipe 0 near the start to pop out
-  // of pipe 1 further down the level (and back again).
-  const PIPE_W = 56, PIPE_H = 64;
-  const pipes = [
-    { x: 150, y: GROUND_Y, w: PIPE_W, h: PIPE_H, linkedTo: 1 },
-    { x: 1000, y: GROUND_Y, w: PIPE_W, h: PIPE_H, linkedTo: 0 },
-  ];
-
-  const coins = [
-    { x: 340, y: 290, taken: false },
-    { x: 560, y: 220, taken: false },
-    { x: 800, y: 300, taken: false },
-    { x: 840, y: 300, taken: false },
-    { x: 1150, y: 310, taken: false },
-    { x: 1330, y: 220, taken: false },
-    { x: 1590, y: 280, taken: false },
-    { x: 1630, y: 280, taken: false },
-    { x: 2030, y: 300, taken: false },
-    { x: 2230, y: 220, taken: false },
-    { x: 2450, y: 310, taken: false },
-    { x: 2710, y: 260, taken: false },
-    { x: 3010, y: 300, taken: false },
-    { x: 3180, y: 210, taken: false },
-  ];
-
-  function initialMushrooms() {
-    return [
-      { x: 500, y: GROUND_Y - 24, taken: false, popT: 0 },
-      { x: 1600, y: 290, taken: false, popT: 0 },
-      { x: 2500, y: GROUND_Y - 24, taken: false, popT: 0 }, // sits on ground segment 3
-      { x: 3000, y: 310, taken: false, popT: 0 },
-    ];
-  }
-  let mushrooms = initialMushrooms();
-
-  // "?" question boxes: bump one from below (jump into its underside) to pop
-  // a mushroom out. Solid like a platform, so they also double as a place
-  // to stand once used.
-  function makeBox(x, y) { return { x, y, w: 28, h: 28, used: false, bumpT: 0 }; }
-  const boxes = [
-    makeBox(250, 340),
-    makeBox(1400, 300),
-    makeBox(2600, 280),
-  ];
-  // Boxes are solid geometry from the start (standable/bumpable) regardless
-  // of whether they've been used yet.
-  for (const b of boxes) solids.push({ x: b.x, y: b.y, w: b.w, h: b.h });
-
-  function bumpBox(b) {
-    if (b.used) return;
-    b.used = true;
-    b.bumpT = 0.2;
-    mushrooms.push({
-      x: b.x + b.w / 2,
-      y: b.y - 16,
-      taken: false,
-      popT: 0.35,
-      popFromY: b.y + b.h / 2,
-    });
-  }
-
-  function makeEnemy(x, y, patrolMin, patrolMax, kind) {
+  function makeEnemy(x, y, patrolMin, patrolMax, kind, speed) {
     return {
       x, y, w: 30, h: 28,
-      vx: -ENEMY_SPEED, vy: 0,
+      vx: -(speed || ENEMY_SPEED), vy: 0,
       alive: true,
       patrolMin, patrolMax,
       squashT: 0, // squash-death animation timer
@@ -311,67 +249,155 @@
     };
   }
 
-  const enemiesInit = () => ([
-    makeEnemy(500, GROUND_Y - 28, 350, 850, 'mushroom'),
-    makeEnemy(1150, 350 - 60, 1130, 1220, 'bat'), // flies above a platform
-    makeEnemy(2000, GROUND_Y - 28, 1900, 2700, 'ghost'),
-    makeEnemy(2900, GROUND_Y - 28, 2860, 3300, 'mushroom'),
-  ]);
-
-  const FLAG_X = LEVEL_WIDTH - 80;
-
-  // ---------------------------------------------------------------------
-  // Zones: the level is split into a few stretches, each with its own
-  // background palette, so it doesn't feel like one flat unchanging scene
-  // the whole way through. Colors blend smoothly between zone midpoints.
-  // ---------------------------------------------------------------------
-  const ZONES = [
-    { end: 900,          sky: ['#140c24', '#241536', '#3d2350'], fog: '190,120,220', mnt: '60,40,90',  wall: '#1e1430', flame: '#ff8a3d', name: 'GRAVEYARD HALL' },
-    { end: 1800,         sky: ['#0b1524', '#122a3c', '#1f4258'], fog: '110,170,210', mnt: '40,75,105', wall: '#16283a', flame: '#6fd0ff', name: 'MOONLIT LIBRARY' },
-    { end: 2700,         sky: ['#230c16', '#3c1424', '#5c1c30'], fog: '220,90,110',  mnt: '95,35,50',  wall: '#3a1420', flame: '#ff4d6a', name: 'CRIMSON BALLROOM' },
-    { end: LEVEL_WIDTH,  sky: ['#1f0f1c', '#3a1830', '#5c2444'], fog: '230,150,120', mnt: '95,55,65',  wall: '#3a1830', flame: '#ffd27a', name: 'HOTEL APPROACH' },
-  ];
-
-  function hexToRgb(hex) {
-    const n = parseInt(hex.slice(1), 16);
-    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-  }
-  function lerpColor(a, b, t) {
-    const ca = hexToRgb(a), cb = hexToRgb(b);
-    const r = Math.round(ca[0] + (cb[0] - ca[0]) * t);
-    const g = Math.round(ca[1] + (cb[1] - ca[1]) * t);
-    const bl = Math.round(ca[2] + (cb[2] - ca[2]) * t);
-    return `rgb(${r},${g},${bl})`;
-  }
-
-  function currentPalette(worldX) {
-    const starts = ZONES.map((z, i) => (i === 0 ? 0 : ZONES[i - 1].end));
-    const mids = ZONES.map((z, i) => (starts[i] + z.end) / 2);
-    let i = 0;
-    while (i < mids.length - 1 && worldX > mids[i + 1]) i++;
-    const j = Math.min(i + 1, ZONES.length - 1);
-    const a = ZONES[i], b = ZONES[j];
-    const span = mids[j] - mids[i] || 1;
-    const t = Math.max(0, Math.min(1, (worldX - mids[i]) / span));
-    return {
-      sky: [lerpColor(a.sky[0], b.sky[0], t), lerpColor(a.sky[1], b.sky[1], t), lerpColor(a.sky[2], b.sky[2], t)],
-      fog: t < 0.5 ? a.fog : b.fog,
-      mnt: t < 0.5 ? a.mnt : b.mnt,
-      wall: lerpColor(a.wall, b.wall, t),
-      flame: t < 0.5 ? a.flame : b.flame,
-      name: t < 0.5 ? a.name : b.name,
+  // Deterministic PRNG so every playthrough of "Level 6" looks the same.
+  function mulberry32(seed) {
+    return function () {
+      seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+      let r = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      r = (r + Math.imul(r ^ (r >>> 7), 61 | r)) ^ r;
+      return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
     };
   }
 
-  // ---------------------------------------------------------------------
-  // Night sky decoration (fixed field, twinkles over time)
-  // ---------------------------------------------------------------------
-  const STARS = Array.from({ length: 90 }, (_, i) => ({
-    x: (i * 137) % (LEVEL_WIDTH + VIEW_W),
-    y: (i * 53) % (GROUND_Y - 60) + 10,
-    r: 1 + (i % 3) * 0.6,
-    phase: i * 0.6,
-  }));
+  // Builds one of the 10 levels. idx is 0-based (0 = level 1, easiest;
+  // 9 = level 10, hardest). Difficulty t (0..1) scales level length, pit
+  // count/width, platform and enemy density, and enemy speed.
+  function buildLevel(idx) {
+    const rand = mulberry32(2026 + idx * 733);
+    const t = idx / (LEVEL_COUNT - 1);
+
+    const width = Math.round(2200 + t * 2000);
+    const pitCount = Math.min(1 + Math.floor(idx / 2), 5);
+    const minSeg = 380, maxSeg = 650;
+    const gapMin = 55 + t * 30;
+    const gapMax = Math.min(85 + t * 70, 140); // stays jumpable at max speed
+    const endReserve = 420;
+
+    // Ground segments separated by pit gaps
+    const segments = [];
+    let x = 0;
+    while (x < width - endReserve && segments.length < pitCount + 1) {
+      const segW = minSeg + rand() * (maxSeg - minSeg);
+      segments.push({ x, w: segW });
+      x += segW;
+      if (segments.length <= pitCount) x += gapMin + rand() * (gapMax - gapMin);
+    }
+    segments.push({ x, w: Math.max(200, width - x) });
+
+    const solids = segments.map(s => rect(s.x, GROUND_Y, s.w, 40));
+
+    function pickGroundSeg(minW) {
+      const pool = segments.filter(s => s.w >= minW);
+      return pool.length ? pool[Math.floor(rand() * pool.length)] : segments[0];
+    }
+
+    // Floating platforms, with a coin above most of them
+    const coins = [];
+    const platCount = 8 + Math.floor(t * 10);
+    for (let i = 0; i < platCount; i++) {
+      const px = 250 + rand() * (width - 500);
+      const py = 230 + rand() * 150;
+      const pw = 90 + rand() * 70;
+      solids.push(rect(px, py, pw, 24));
+      if (rand() < 0.7) coins.push({ x: px + pw / 2, y: py - 40, taken: false });
+    }
+
+    // Ground-level coins, kept over solid ground for a clean pickup arc
+    const groundCoinCount = 6 + Math.floor(t * 6);
+    for (let i = 0; i < groundCoinCount; i++) {
+      const seg = pickGroundSeg(150);
+      const cx = seg.x + 40 + rand() * Math.max(1, seg.w - 80);
+      coins.push({ x: cx, y: GROUND_Y - 60 - rand() * 40, taken: false });
+    }
+
+    // Power mushrooms
+    const mushrooms = [];
+    const mushroomCount = 2 + Math.floor(t * 2);
+    for (let i = 0; i < mushroomCount; i++) {
+      const seg = pickGroundSeg(150);
+      const mx = seg.x + 50 + rand() * Math.max(1, seg.w - 100);
+      mushrooms.push({ x: mx, y: GROUND_Y - 24, taken: false, popT: 0 });
+    }
+
+    // Warp pipes: entrance anchored just past the player's spawn, exit
+    // anchored near the start of the level's last ground segment — always
+    // on solid ground since they're placed relative to segment starts
+    // rather than randomly. Standing on one and pressing Down teleports to
+    // its pair (and back).
+    const PIPE_W = 56, PIPE_H = 64;
+    const firstSeg = segments[0];
+    const lastSeg = segments[segments.length - 1];
+    const pipes = [
+      { x: firstSeg.x + 130, y: GROUND_Y, w: PIPE_W, h: PIPE_H, linkedTo: 1 },
+      { x: Math.max(firstSeg.x + 320, lastSeg.x + 40), y: GROUND_Y, w: PIPE_W, h: PIPE_H, linkedTo: 0 },
+    ];
+
+    // "?" boxes: jump into one from below to pop a mushroom out.
+    const boxes = [];
+    const boxCount = 1 + Math.floor(t * 1.5);
+    for (let i = 0; i < boxCount; i++) {
+      const seg = pickGroundSeg(180);
+      const bx = seg.x + 150 + rand() * Math.max(1, seg.w - 300);
+      boxes.push({ x: bx, y: GROUND_Y - 110, w: 28, h: 28, used: false, bumpT: 0 });
+    }
+    for (const b of boxes) solids.push(rect(b.x, b.y, b.w, b.h));
+
+    // Enemies: ground mushrooms patrol within one ground segment; bats/ghosts
+    // fly freely (including over pits) and get more common at higher levels.
+    const enemies = [];
+    const enemyCount = 2 + Math.floor(t * 8);
+    const speedMul = 1 + t * 0.6;
+    for (let i = 0; i < enemyCount; i++) {
+      const roll = rand();
+      const kind = t < 0.25 ? 'mushroom' : (roll < 0.4 ? 'mushroom' : roll < 0.7 ? 'bat' : 'ghost');
+      if (kind === 'mushroom') {
+        const seg = pickGroundSeg(220);
+        // Keep the segment that holds the fixed player spawn (x=60) clear.
+        const pMin = seg.x === 0 ? 170 : seg.x + 20;
+        const pMax = seg.x + seg.w - 20 - 30;
+        if (pMax <= pMin) continue;
+        const ex = pMin + rand() * (pMax - pMin);
+        enemies.push(makeEnemy(ex, GROUND_Y - 28, pMin, pMax, 'mushroom', ENEMY_SPEED * speedMul));
+      } else {
+        const pMin = 350 + rand() * (width - 900);
+        const pMax = pMin + 150 + rand() * 280;
+        const ex = pMin + (pMax - pMin) / 2;
+        const baseY = kind === 'bat' ? 150 + rand() * 140 : GROUND_Y - 40 - rand() * 130;
+        enemies.push(makeEnemy(ex, baseY, pMin, pMax, kind, ENEMY_SPEED * speedMul * 0.9));
+      }
+    }
+
+    return { width, solids, coins, mushrooms, enemies, pipes, boxes, flagX: width - 80 };
+  }
+
+  // Night sky decoration (fixed field, twinkles over time), rebuilt per level
+  function buildStars(width) {
+    return Array.from({ length: 90 }, (_, i) => ({
+      x: (i * 137) % (width + VIEW_W),
+      y: (i * 53) % (GROUND_Y - 60) + 10,
+      r: 1 + (i % 3) * 0.6,
+      phase: i * 0.6,
+    }));
+  }
+
+  let solids = [];
+  let coins = [];
+  let mushrooms = [];
+  let enemies = [];
+  let pipes = [];
+  let boxes = [];
+  let FLAG_X = 0;
+  let STARS = [];
+
+  // Zone flavor names, keyed by level index — purely cosmetic, shown in the
+  // HUD alongside the level number so each stretch of the run feels like
+  // its own place even though the geometry is procedurally generated.
+  const ZONE_NAMES = [
+    'GRAVEYARD HALL', 'GRAVEYARD HALL',
+    'MOONLIT LIBRARY', 'MOONLIT LIBRARY',
+    'CRIMSON BALLROOM', 'CRIMSON BALLROOM', 'CRIMSON BALLROOM',
+    'HOTEL APPROACH', 'HOTEL APPROACH', 'HOTEL APPROACH',
+  ];
 
   // ---------------------------------------------------------------------
   // Player
@@ -383,8 +409,9 @@
       vx: 0, vy: 0,
       onGround: false,
       facing: 1,
-      invuln: 0,
+      invuln: 1.0, // brief grace period so a spawn-point enemy can't chain-kill
       jumpsUsed: 0,
+      animTime: 0,
       warping: false,
       warpT: 0,
       warpTo: null,
@@ -396,30 +423,47 @@
   // Game state
   // ---------------------------------------------------------------------
   const state = {
-    mode: 'playing', // 'playing' | 'gameover' | 'victory'
+    mode: 'playing', // 'playing' | 'levelcomplete' | 'gameover' | 'victory'
     score: 0,
     lives: 3,
     cameraX: 0,
     scoreSubmitted: false,
     leaderboard: [],
+    currentLevel: 0,       // 0-based; level shown to the player is currentLevel + 1
+    levelCompleteTimer: 0,
   };
 
   let player = makePlayer();
-  let enemies = enemiesInit();
+
+  // Loads level `idx` (0-based): rebuilds its geometry/enemies/coins and
+  // drops the player at its start. Score and lives carry over across levels.
+  function loadLevel(idx) {
+    state.currentLevel = idx;
+    const built = buildLevel(idx);
+    solids = built.solids;
+    coins = built.coins;
+    mushrooms = built.mushrooms;
+    enemies = built.enemies;
+    pipes = built.pipes;
+    boxes = built.boxes;
+    FLAG_X = built.flagX;
+    LEVEL_WIDTH = built.width;
+    STARS = buildStars(LEVEL_WIDTH);
+    player = makePlayer();
+    state.cameraX = 0;
+  }
 
   function resetGame() {
-    player = makePlayer();
-    enemies = enemiesInit();
-    coins.forEach(c => c.taken = false);
-    mushrooms = initialMushrooms();
-    boxes.forEach(b => { b.used = false; b.bumpT = 0; });
     state.mode = 'playing';
     state.score = 0;
     state.lives = 3;
-    state.cameraX = 0;
     state.scoreSubmitted = false;
     state.leaderboard = [];
+    state.levelCompleteTimer = 0;
+    loadLevel(0);
   }
+
+  loadLevel(0);
 
   function respawnAfterDeath() {
     state.lives--;
@@ -428,6 +472,7 @@
       return;
     }
     player = makePlayer();
+    state.cameraX = 0;
   }
 
   // ---------------------------------------------------------------------
@@ -459,9 +504,6 @@
     }
   }
 
-  // ---------------------------------------------------------------------
-  // Update
-  // ---------------------------------------------------------------------
   function findPipeUnder(p) {
     const cx = p.x + p.w / 2;
     return pipes.find(pp => cx >= pp.x && cx <= pp.x + pp.w && Math.abs((p.y + p.h) - pp.y) < 6);
@@ -476,6 +518,22 @@
     p.vy = 0;
   }
 
+  function bumpBox(b) {
+    if (b.used) return;
+    b.used = true;
+    b.bumpT = 0.2;
+    mushrooms.push({
+      x: b.x + b.w / 2,
+      y: b.y - 16,
+      taken: false,
+      popT: 0.35,
+      popFromY: b.y + b.h / 2,
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Update
+  // ---------------------------------------------------------------------
   function updatePlayer(dt) {
     const p = player;
 
@@ -551,6 +609,10 @@
       }
     }
 
+    // --- Walk-cycle animation timer (idle at rest, cycles faster when running) ---
+    if (p.onGround && Math.abs(p.vx) > 5) p.animTime += dt * (Math.abs(p.vx) / 90);
+    else p.animTime = 0;
+
     // Level bounds
     if (p.x < 0) p.x = 0;
     if (p.x + p.w > LEVEL_WIDTH) p.x = LEVEL_WIDTH - p.w;
@@ -609,9 +671,15 @@
       }
     }
 
-    // --- Flag / victory ---
+    // --- Flag: advance to the next level, or win the game on the last one ---
     if (p.x + p.w >= FLAG_X) {
-      state.mode = 'victory';
+      if (state.currentLevel >= LEVEL_COUNT - 1) {
+        state.mode = 'victory';
+      } else {
+        state.score += 300 + state.currentLevel * 100; // level-clear bonus
+        state.mode = 'levelcomplete';
+        state.levelCompleteTimer = 1.6;
+      }
     }
   }
 
@@ -651,12 +719,22 @@
   }
 
   function update(dt) {
+    if (state.mode === 'levelcomplete') {
+      state.levelCompleteTimer -= dt;
+      if (state.levelCompleteTimer <= 0) {
+        loadLevel(state.currentLevel + 1);
+        state.mode = 'playing';
+      }
+      return;
+    }
     if (state.mode !== 'playing') return;
     updatePlayer(dt);
     if (state.mode !== 'playing') {
-      if (!state.scoreSubmitted) {
-        state.scoreSubmitted = true;
-        finishGame();
+      if (state.mode === 'gameover' || state.mode === 'victory') {
+        if (!state.scoreSubmitted) {
+          state.scoreSubmitted = true;
+          finishGame();
+        }
       }
       return;
     }
@@ -681,16 +759,32 @@
   // ---------------------------------------------------------------------
   // Drawing
   // ---------------------------------------------------------------------
+  // Mixes two "#rrggbb" colors; t=0 is colorA, t=1 is colorB.
+  function lerpColor(colorA, colorB, t) {
+    const a = parseInt(colorA.slice(1), 16), b = parseInt(colorB.slice(1), 16);
+    const r = Math.round(((a >> 16) & 255) + (((b >> 16) & 255) - ((a >> 16) & 255)) * t);
+    const g = Math.round(((a >> 8) & 255) + (((b >> 8) & 255) - ((a >> 8) & 255)) * t);
+    const bl = Math.round((a & 255) + ((b & 255) - (a & 255)) * t);
+    return `rgb(${r}, ${g}, ${bl})`;
+  }
+
+  // 0 at level 1 (calm) -> 1 at level 10 (dangerous); used to redden the
+  // whole scene as the run gets harder, so each level visibly escalates.
+  function levelDanger() { return state.currentLevel / (LEVEL_COUNT - 1); }
+
+  function lerpRgba(colorA, colorB, t, alpha) {
+    return lerpColor(colorA, colorB, t).replace('rgb(', 'rgba(').slice(0, -1) + `, ${alpha})`;
+  }
+
   function drawBackground(t) {
-    const pal = currentPalette(state.cameraX + VIEW_W / 2);
+    const dT = levelDanger();
 
     // Castle-hall gradient: deep indigo stone fading to a violet haze low
-    // down — recolored per zone so each stretch of the level reads as its
-    // own room instead of one continuous unchanging backdrop.
+    // down at level 1, trending toward a hot crimson glow by level 10.
     const sky = ctx.createLinearGradient(0, 0, 0, VIEW_H);
-    sky.addColorStop(0, pal.sky[0]);
-    sky.addColorStop(0.5, pal.sky[1]);
-    sky.addColorStop(1, pal.sky[2]);
+    sky.addColorStop(0, lerpColor('#140c24', '#2a0808', dT));
+    sky.addColorStop(0.5, lerpColor('#241536', '#4a1210', dT));
+    sky.addColorStop(1, lerpColor('#3d2350', '#6b1f18', dT));
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
@@ -712,7 +806,7 @@
     // Hazy far-distance mountain range — the slowest-moving layer, giving
     // the scene an extra plane of depth behind the windows/hotel.
     const farParallax = state.cameraX * 0.08;
-    ctx.fillStyle = `rgba(${pal.mnt}, 0.35)`;
+    ctx.fillStyle = lerpColor('#3c2860', '#603030', dT).replace('rgb(', 'rgba(').slice(0, -1) + ', 0.35)';
     for (let i = -1; i < 6; i++) {
       const mx = i * 360 - (farParallax % 360);
       ctx.beginPath();
@@ -739,7 +833,7 @@
 
     // Distant brick wall texture band above the platforms
     const parallax = state.cameraX * 0.3;
-    ctx.fillStyle = pal.wall;
+    ctx.fillStyle = lerpColor('#1e1430', '#341210', dT);
     ctx.fillRect(0, GROUND_Y - 70, VIEW_W, 70);
     ctx.strokeStyle = 'rgba(0,0,0,0.35)';
     ctx.lineWidth = 1;
@@ -750,17 +844,19 @@
       ctx.stroke();
     }
 
-    // Wall-mounted torches, flame color tinted per zone, spaced along the hall
+    // Wall-mounted torches, flame color warming from orange to red as the
+    // run gets more dangerous, spaced along the corridor.
+    const torchColor = lerpColor('#ff8a3d', '#ff4d6a', dT);
     const torchSpacing = 260;
     for (let i = -1; i < Math.ceil(VIEW_W / torchSpacing) + 2; i++) {
       const wxWorld = Math.floor((state.cameraX + i * torchSpacing) / torchSpacing) * torchSpacing + torchSpacing / 2;
       const tx = wxWorld - state.cameraX;
-      drawTorch(tx, GROUND_Y - 90, currentPalette(wxWorld).flame, t);
+      drawTorch(tx, GROUND_Y - 90, torchColor, t);
     }
 
-    // Drifting ground fog, tinted per zone
+    // Drifting ground fog: purple at level 1, smoky red haze by level 10
     const parallax2 = state.cameraX * 0.5;
-    ctx.fillStyle = `rgba(${pal.fog}, 0.10)`;
+    ctx.fillStyle = `rgba(${Math.round(190 + dT * 40)}, ${Math.round(120 - dT * 70)}, ${Math.round(220 - dT * 170)}, 0.10)`;
     for (let i = -1; i < 8; i++) {
       const fx = i * 300 - (parallax2 % 300) + Math.sin(t * 0.3 + i) * 12;
       const fy = GROUND_Y - 30 - (i % 3) * 18;
@@ -769,18 +865,16 @@
   }
 
   function drawTorch(x, y, flameColor, t) {
-    // bracket
     ctx.fillStyle = '#2a2030';
     ctx.fillRect(x - 2, y, 4, 14);
     ctx.fillStyle = '#1a1420';
     ctx.beginPath();
     ctx.ellipse(x, y, 5, 4, 0, 0, Math.PI * 2);
     ctx.fill();
-    // flickering flame glow
     const flicker = 0.75 + Math.abs(Math.sin(t * 9 + x)) * 0.25;
     const glow = ctx.createRadialGradient(x, y - 6, 1, x, y - 6, 16 * flicker);
-    glow.addColorStop(0, flameColor + 'e6');
-    glow.addColorStop(1, flameColor + '00');
+    glow.addColorStop(0, flameColor.replace('rgb(', 'rgba(').slice(0, -1) + ', 0.9)');
+    glow.addColorStop(1, flameColor.replace('rgb(', 'rgba(').slice(0, -1) + ', 0)');
     ctx.fillStyle = glow;
     ctx.beginPath();
     ctx.arc(x, y - 6, 16 * flicker, 0, Math.PI * 2);
@@ -997,17 +1091,19 @@
   }
 
   function drawSlimePool(t) {
-    // Glowing purple ooze filling the pit gaps below the platforms.
+    // Glowing ooze filling the pit gaps below the platforms — purple at
+    // level 1, shifting toward molten lava-orange by level 10.
     // Drawn before the platforms so solid ground/floor tiles paint over it
     // wherever the level actually has floor, leaving only the pits lethal.
+    const dT = levelDanger();
     const poolY = KILL_Y - 30;
     const grad = ctx.createLinearGradient(0, poolY, 0, VIEW_H);
-    grad.addColorStop(0, 'rgba(190, 60, 230, 0.9)');
-    grad.addColorStop(1, 'rgba(90, 20, 120, 0.95)');
+    grad.addColorStop(0, lerpRgba('#be3ce6', '#ff8a1e', dT, 0.9));
+    grad.addColorStop(1, lerpRgba('#5a1478', '#8a2c0a', dT, 0.95));
     ctx.fillStyle = grad;
     ctx.fillRect(0, poolY, VIEW_W, VIEW_H - poolY);
 
-    ctx.strokeStyle = 'rgba(230, 160, 255, 0.8)';
+    ctx.strokeStyle = lerpRgba('#e6a0ff', '#ffd27a', dT, 0.8);
     ctx.lineWidth = 3;
     ctx.beginPath();
     for (let x = 0; x <= VIEW_W; x += 20) {
@@ -1018,7 +1114,7 @@
     ctx.stroke();
 
     // rising bubbles
-    ctx.fillStyle = 'rgba(230, 180, 255, 0.7)';
+    ctx.fillStyle = lerpRgba('#e6b4ff', '#ffe0a0', dT, 0.7);
     for (let i = 0; i < 14; i++) {
       const bx = (i * 97 + (t * 30) % 97 * 3) % VIEW_W;
       const by = poolY + 20 + ((i * 53 + t * 40) % (VIEW_H - poolY - 20));
@@ -1140,13 +1236,11 @@
       const top = pp.y - pp.h;
       const lipH = 16;
 
-      // cast shadow on the ground it's planted in
       ctx.fillStyle = 'rgba(3, 1, 6, 0.4)';
       ctx.beginPath();
       ctx.ellipse(sx + pp.w / 2, pp.y + 3, pp.w / 2 + 4, 5, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // main body — green gradient for a rounded, tube-like look
       const bodyGrad = ctx.createLinearGradient(sx, 0, sx + pp.w, 0);
       bodyGrad.addColorStop(0, '#0e5c28');
       bodyGrad.addColorStop(0.22, '#2fae52');
@@ -1156,29 +1250,24 @@
       ctx.fillStyle = bodyGrad;
       ctx.fillRect(sx + 4, top + lipH, pp.w - 8, pp.h - lipH);
 
-      // wider collar/lip at the mouth of the pipe
       ctx.fillStyle = bodyGrad;
       ctx.fillRect(sx, top, pp.w, lipH);
       ctx.fillStyle = 'rgba(0,0,0,0.4)';
       ctx.fillRect(sx, top, pp.w, 3);
 
-      // dark outline
       ctx.strokeStyle = '#062f14';
       ctx.lineWidth = 2.5;
       ctx.strokeRect(sx + 1, top + 1, pp.w - 2, lipH - 2);
       ctx.strokeRect(sx + 5, top + lipH, pp.w - 10, pp.h - lipH - 1);
 
-      // glossy highlight streak down the left side
       ctx.fillStyle = 'rgba(255,255,255,0.22)';
       ctx.fillRect(sx + 10, top + lipH + 4, 5, pp.h - lipH - 8);
 
-      // dark opening at the mouth (where the character sinks/rises)
       ctx.fillStyle = '#031006';
       ctx.beginPath();
       ctx.ellipse(sx + pp.w / 2, top + lipH / 2, pp.w / 2 - 5, lipH / 2 - 2, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // pulsing hint when the player is standing on a usable pipe
       const cx = player.x + player.w / 2;
       const onThisPipe = player.onGround && !player.warping &&
         cx >= pp.x && cx <= pp.x + pp.w && Math.abs((player.y + player.h) - pp.y) < 6;
@@ -1189,6 +1278,42 @@
         ctx.textAlign = 'center';
         ctx.fillText('▼', sx + pp.w / 2, top - 8 + bob);
         ctx.textAlign = 'left';
+      }
+    }
+  }
+
+  function drawBoxes() {
+    for (const b of boxes) {
+      const sx = b.x - state.cameraX;
+      if (sx + b.w < -20 || sx > VIEW_W + 20) continue;
+      const bounce = b.bumpT > 0 ? -Math.sin((b.bumpT / 0.2) * Math.PI) * 6 : 0;
+      const by = b.y + bounce;
+
+      if (b.used) {
+        const grad = ctx.createLinearGradient(0, by, 0, by + b.h);
+        grad.addColorStop(0, '#6b5240');
+        grad.addColorStop(1, '#3a2a20');
+        ctx.fillStyle = grad;
+        ctx.fillRect(sx, by, b.w, b.h);
+        ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(sx + 1, by + 1, b.w - 2, b.h - 2);
+      } else {
+        const grad = ctx.createLinearGradient(0, by, 0, by + b.h);
+        grad.addColorStop(0, '#ffd23f');
+        grad.addColorStop(1, '#b8860b');
+        ctx.fillStyle = grad;
+        ctx.fillRect(sx, by, b.w, b.h);
+        ctx.strokeStyle = '#5c4108';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(sx + 1, by + 1, b.w - 2, b.h - 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
+        ctx.fillRect(sx + 2, by + 2, b.w - 4, 3);
+        ctx.fillStyle = '#5c4108';
+        ctx.font = 'bold 16px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('?', sx + b.w / 2, by + b.h / 2 + 1);
       }
     }
   }
@@ -1234,7 +1359,7 @@
       // Freshly-bumped mushrooms rise up out of their box over popT seconds.
       let my = m.y;
       if (m.popT > 0) {
-        const localT = 1 - m.popT / 0.35; // 0 -> 1 as it rises
+        const localT = 1 - m.popT / 0.35;
         my = m.popFromY + (m.y - m.popFromY) * localT;
       }
 
@@ -1256,42 +1381,6 @@
       ctx.arc(mx + 6, my - 5, 3, 0, Math.PI * 2);
       ctx.arc(mx, my - 10, 2.5, 0, Math.PI * 2);
       ctx.fill();
-    }
-  }
-
-  function drawBoxes() {
-    for (const b of boxes) {
-      const sx = b.x - state.cameraX;
-      if (sx + b.w < -20 || sx > VIEW_W + 20) continue;
-      const bounce = b.bumpT > 0 ? -Math.sin((b.bumpT / 0.2) * Math.PI) * 6 : 0;
-      const by = b.y + bounce;
-
-      if (b.used) {
-        const grad = ctx.createLinearGradient(0, by, 0, by + b.h);
-        grad.addColorStop(0, '#6b5240');
-        grad.addColorStop(1, '#3a2a20');
-        ctx.fillStyle = grad;
-        ctx.fillRect(sx, by, b.w, b.h);
-        ctx.strokeStyle = 'rgba(0,0,0,0.4)';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(sx + 1, by + 1, b.w - 2, b.h - 2);
-      } else {
-        const grad = ctx.createLinearGradient(0, by, 0, by + b.h);
-        grad.addColorStop(0, '#ffd23f');
-        grad.addColorStop(1, '#b8860b');
-        ctx.fillStyle = grad;
-        ctx.fillRect(sx, by, b.w, b.h);
-        ctx.strokeStyle = '#5c4108';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(sx + 1, by + 1, b.w - 2, b.h - 2);
-        ctx.fillStyle = 'rgba(255,255,255,0.35)';
-        ctx.fillRect(sx + 2, by + 2, b.w - 4, 3);
-        ctx.fillStyle = '#5c4108';
-        ctx.font = 'bold 16px monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('?', sx + b.w / 2, by + b.h / 2 + 1);
-      }
     }
   }
 
@@ -1410,38 +1499,13 @@
   }
 
   function drawGhostEnemy(ex, en, t) {
-    const cx = ex + en.w / 2, top = en.y, w = en.w, h = en.h;
-    // flowing hooded robe — gradient gives it a sense of folds/volume
-    const robeGrad = ctx.createLinearGradient(cx - w / 2, top, cx + w / 2, top + h);
-    robeGrad.addColorStop(0, '#332146');
-    robeGrad.addColorStop(0.5, '#1c1428');
-    robeGrad.addColorStop(1, '#0c0714');
-    ctx.fillStyle = robeGrad;
-    ctx.beginPath();
-    ctx.moveTo(cx - w / 2, top + h);
-    ctx.quadraticCurveTo(cx - w / 2 - 4, top + h * 0.4, cx, top);
-    ctx.quadraticCurveTo(cx + w / 2 + 4, top + h * 0.4, cx + w / 2, top + h);
-    const wob = Math.sin(t * 3 + cx) * 3;
-    ctx.quadraticCurveTo(cx + w / 4, top + h - 6 + wob, cx, top + h - 2);
-    ctx.quadraticCurveTo(cx - w / 4, top + h - 6 - wob, cx - w / 2, top + h);
-    ctx.closePath();
-    ctx.fill();
-
-    // hood shadow / void face
-    ctx.fillStyle = '#0a0612';
-    ctx.beginPath();
-    ctx.ellipse(cx, top + h * 0.38, w * 0.28, h * 0.26, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // glowing red eyes
-    ctx.shadowColor = '#ff2a2a';
-    ctx.shadowBlur = 10;
-    ctx.fillStyle = '#ff2a2a';
-    ctx.beginPath();
-    ctx.arc(cx - 5, top + h * 0.38, 2.4, 0, Math.PI * 2);
-    ctx.arc(cx + 5, top + h * 0.38, 2.4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
+    if (!imageReady(SPRITES.ghost)) return;
+    const img = SPRITES.ghost;
+    const drawH = en.h * 1.9;
+    const drawW = drawH * (img.naturalWidth / img.naturalHeight);
+    const drawX = ex + en.w / 2 - drawW / 2;
+    const drawY = en.y + en.h - drawH;
+    ctx.drawImage(img, drawX, drawY, drawW, drawH);
   }
 
   function drawFlag() {
@@ -1485,129 +1549,26 @@
     ctx.scale(grow, grow);
     ctx.translate(-p.w / 2, -(p.y + p.h));
 
-    // Legs: white stockings + shaded red boots
-    ctx.fillStyle = '#f0ecf5';
-    ctx.fillRect(4, p.y + 26, 20, 14);
-    const bootGrad = ctx.createLinearGradient(0, p.y + 35, 0, p.y + 41);
-    bootGrad.addColorStop(0, '#e0355a');
-    bootGrad.addColorStop(1, '#8f1029');
-    ctx.fillStyle = bootGrad;
-    ctx.fillRect(3, p.y + 35, 10, 6);
-    ctx.fillRect(15, p.y + 35, 10, 6);
-    ctx.fillStyle = '#5c0a1c';
-    ctx.fillRect(3, p.y + 39, 10, 2);
-    ctx.fillRect(15, p.y + 39, 10, 2);
+    if (imageReady(SPRITES.playerWalk)) {
+      const sheet = SPRITES.playerWalk;
+      const frameW = sheet.naturalWidth / PLAYER_FRAME_COUNT;
+      const frameH = sheet.naturalHeight;
+      // Frame order: 0 idle, 1/2 alternating walk cycle, 3 airborne.
+      const frameIndex = !p.onGround
+        ? 3
+        : (Math.abs(p.vx) > 5 ? 1 + (Math.floor(p.animTime * 8) % 2) : 0);
 
-    // Flared purple dress, drawn as a trapezoid with a light-from-upper-left
-    // gradient so it reads as fabric wrapped around a body, not a flat shape.
-    const dressGrad = ctx.createLinearGradient(2, p.y + 14, 26, p.y + 30);
-    dressGrad.addColorStop(0, '#8a4bb0');
-    dressGrad.addColorStop(0.5, '#6a2d8f');
-    dressGrad.addColorStop(1, '#3e1a58');
-    ctx.fillStyle = dressGrad;
-    ctx.beginPath();
-    ctx.moveTo(6, p.y + 14);
-    ctx.lineTo(22, p.y + 14);
-    ctx.lineTo(26, p.y + 30);
-    ctx.lineTo(2, p.y + 30);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = '#4a1f66';
-    ctx.fillRect(2, p.y + 27, 24, 3);
+      const drawH = 56;
+      const drawW = drawH * (frameW / frameH);
+      const drawX = p.w / 2 - drawW / 2;
+      const drawY = p.y + p.h - drawH;
 
-    // White blouse collar, with a soft shadow cast by the chin/hair above it
-    ctx.fillStyle = '#f0ecf5';
-    ctx.fillRect(4, p.y + 12, 20, 6);
-    ctx.fillStyle = 'rgba(20, 10, 10, 0.18)';
-    ctx.fillRect(4, p.y + 12, 20, 2);
-
-    // White glove peeking at the side
-    ctx.fillStyle = '#fdfbff';
-    ctx.beginPath();
-    ctx.arc(1, p.y + 20, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = 'rgba(0,0,0,0.12)';
-    ctx.beginPath();
-    ctx.arc(2, p.y + 22, 3, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Glossy black hair falling behind the head/shoulders — a radial sheen
-    // keeps solid black from reading as a flat silhouette.
-    const hairGrad = ctx.createRadialGradient(6, p.y + 10, 1, 12, p.y + 18, 26);
-    hairGrad.addColorStop(0, '#3a3a42');
-    hairGrad.addColorStop(0.35, '#141318');
-    hairGrad.addColorStop(1, '#050507');
-    ctx.fillStyle = hairGrad;
-    ctx.beginPath();
-    ctx.moveTo(3, p.y - 2);
-    ctx.quadraticCurveTo(-3, p.y + 20, 2, p.y + 34);
-    ctx.lineTo(8, p.y + 32);
-    ctx.quadraticCurveTo(4, p.y + 14, 8, p.y - 1);
-    ctx.closePath();
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(21, p.y - 2);
-    ctx.quadraticCurveTo(27, p.y + 20, 22, p.y + 34);
-    ctx.lineTo(16, p.y + 32);
-    ctx.quadraticCurveTo(20, p.y + 14, 16, p.y - 1);
-    ctx.closePath();
-    ctx.fill();
-    // thin glossy highlight streaks down each hair panel
-    ctx.strokeStyle = 'rgba(140, 140, 160, 0.35)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(4, p.y + 4);
-    ctx.quadraticCurveTo(0, p.y + 18, 3, p.y + 30);
-    ctx.moveTo(20, p.y + 4);
-    ctx.quadraticCurveTo(24, p.y + 18, 21, p.y + 30);
-    ctx.stroke();
-
-    // Head, with a faint jaw-shadow for a touch of roundness
-    ctx.fillStyle = '#f0c9a0';
-    ctx.fillRect(6, p.y, 16, 14);
-    ctx.fillStyle = 'rgba(160, 100, 70, 0.25)';
-    ctx.fillRect(6, p.y + 11, 16, 3);
-
-    // Glossy black bangs
-    ctx.fillStyle = hairGrad;
-    ctx.fillRect(6, p.y, 5, 5);
-    ctx.fillRect(17, p.y, 5, 5);
-    ctx.fillStyle = 'rgba(255,255,255,0.15)';
-    ctx.fillRect(7, p.y, 1, 4);
-    ctx.fillRect(18, p.y, 1, 4);
-
-    // Purple cap with a red "M" badge — domed gradient for a rounded look
-    const capGrad = ctx.createRadialGradient(10, p.y - 8, 1, 14, p.y - 4, 16);
-    capGrad.addColorStop(0, '#8a4fc0');
-    capGrad.addColorStop(0.55, '#5a2380');
-    capGrad.addColorStop(1, '#341350');
-    ctx.fillStyle = capGrad;
-    ctx.beginPath();
-    ctx.moveTo(3, p.y - 1);
-    ctx.quadraticCurveTo(14, p.y - 12, 25, p.y - 1);
-    ctx.lineTo(25, p.y + 2);
-    ctx.lineTo(3, p.y + 2);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = '#3a1658';
-    ctx.fillRect(20, p.y - 3, 8, 4);
-    ctx.fillStyle = '#c81e3a';
-    ctx.beginPath();
-    ctx.arc(14, p.y - 5, 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.font = 'bold 6px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('M', 14, p.y - 3);
-    ctx.textAlign = 'left';
-
-    // Eyebrow + blue eye, friendly (no glow)
-    ctx.fillStyle = 'rgba(15, 10, 10, 0.6)';
-    ctx.fillRect(15, p.y + 2, 5, 1);
-    ctx.fillStyle = '#2a4d8f';
-    ctx.fillRect(16, p.y + 4, 3, 4);
-    ctx.fillStyle = 'rgba(255,255,255,0.7)';
-    ctx.fillRect(17, p.y + 4, 1, 1);
+      ctx.drawImage(
+        sheet,
+        frameIndex * frameW, 0, frameW, frameH,
+        drawX, drawY, drawW, drawH
+      );
+    }
 
     ctx.restore();
   }
@@ -1665,7 +1626,16 @@
     ctx.textAlign = 'left';
     ctx.fillText(state.score + ' G', 124, 23);
 
-    // Progress + current zone name, small, top-center
+    // Level indicator, under the hearts
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(
+      `LEVEL ${state.currentLevel + 1}/${LEVEL_COUNT} · ${DIFFICULTY_NAMES[state.currentLevel]}`,
+      20, 46
+    );
+
+    // Progress + zone flavor name, small, top-center
     const pct = Math.round(Math.min(100, (player.x / (FLAG_X)) * 100));
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
     ctx.font = 'bold 13px monospace';
@@ -1673,7 +1643,7 @@
     ctx.fillText(pct + '%', VIEW_W / 2, 22);
     ctx.fillStyle = 'rgba(255, 159, 196, 0.85)';
     ctx.font = 'bold 10px monospace';
-    ctx.fillText(currentPalette(player.x).name, VIEW_W / 2, 38);
+    ctx.fillText(ZONE_NAMES[state.currentLevel], VIEW_W / 2, 38);
 
     // Portrait nameplate (top-right)
     const boxW = 150, boxH = 34, boxX = VIEW_W - boxW - 14, boxY = 8;
@@ -1718,23 +1688,44 @@
 
     ctx.fillStyle = 'rgba(0,0,0,0.65)';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-
     ctx.textAlign = 'center';
+
+    if (state.mode === 'levelcomplete') {
+      ctx.fillStyle = '#ffd23f';
+      ctx.font = 'bold 40px monospace';
+      ctx.fillText(`LEVEL ${state.currentLevel + 1} COMPLETE!`, VIEW_W / 2, VIEW_H / 2 - 20);
+      ctx.fillStyle = '#fff';
+      ctx.font = '20px monospace';
+      ctx.fillText('Score: ' + state.score, VIEW_W / 2, VIEW_H / 2 + 20);
+      ctx.font = '15px monospace';
+      ctx.fillText(
+        `Get ready for Level ${state.currentLevel + 2} · ${DIFFICULTY_NAMES[state.currentLevel + 1]}`,
+        VIEW_W / 2, VIEW_H / 2 + 50
+      );
+      ctx.textAlign = 'left';
+      return;
+    }
+
     ctx.fillStyle = state.mode === 'victory' ? '#ffd23f' : '#e03c31';
-    ctx.font = 'bold 48px monospace';
-    ctx.fillText(state.mode === 'victory' ? 'YOU WIN!' : 'GAME OVER', VIEW_W / 2, VIEW_H / 2 - 30);
+    ctx.font = 'bold 40px monospace';
+    ctx.fillText(state.mode === 'victory' ? 'ALL 10 LEVELS CLEARED!' : 'GAME OVER', VIEW_W / 2, VIEW_H / 2 - 30);
 
     ctx.fillStyle = '#fff';
     ctx.font = '20px monospace';
     ctx.fillText('Final Score: ' + state.score, VIEW_W / 2, VIEW_H / 2 + 15);
-    ctx.fillText('Press ENTER or SPACE to restart', VIEW_W / 2, VIEW_H / 2 + 50);
+    if (state.mode === 'gameover') {
+      ctx.font = '15px monospace';
+      ctx.fillText(`Reached Level ${state.currentLevel + 1} / ${LEVEL_COUNT}`, VIEW_W / 2, VIEW_H / 2 + 38);
+    }
+    ctx.font = '18px monospace';
+    ctx.fillText('Press ENTER or SPACE to restart', VIEW_W / 2, VIEW_H / 2 + 60);
 
     if (state.leaderboard.length) {
       ctx.font = 'bold 16px monospace';
-      ctx.fillText('TOP SCORES', VIEW_W / 2, VIEW_H / 2 + 85);
+      ctx.fillText('TOP SCORES', VIEW_W / 2, VIEW_H / 2 + 92);
       ctx.font = '15px monospace';
       state.leaderboard.forEach((entry, i) => {
-        ctx.fillText(`${i + 1}. ${entry.name} — ${entry.score}`, VIEW_W / 2, VIEW_H / 2 + 108 + i * 20);
+        ctx.fillText(`${i + 1}. ${entry.name} — ${entry.score}`, VIEW_W / 2, VIEW_H / 2 + 115 + i * 20);
       });
     }
 
