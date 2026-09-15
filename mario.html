@@ -528,6 +528,8 @@
       taken: false,
       popT: 0.35,
       popFromY: b.y + b.h / 2,
+      vy: 0,
+      falling: true,
     });
   }
 
@@ -746,7 +748,23 @@
 
   function updateMushroomPops(dt) {
     for (const m of mushrooms) {
-      if (m.popT > 0) m.popT = Math.max(0, m.popT - dt);
+      if (m.popT > 0) {
+        m.popT = Math.max(0, m.popT - dt);
+        continue;
+      }
+      // Once it's fully out of the box, a popped mushroom falls until it
+      // lands on the platform/ground below it instead of hovering in place.
+      if (!m.falling || m.taken) continue;
+      const groundY = findGroundY(m.x);
+      const restY = groundY === null ? m.y : groundY - 12;
+      if (m.y >= restY) {
+        m.y = restY;
+        m.falling = false;
+        m.vy = 0;
+        continue;
+      }
+      m.vy += GRAVITY * dt;
+      m.y = Math.min(restY, m.y + m.vy * dt);
     }
   }
 
