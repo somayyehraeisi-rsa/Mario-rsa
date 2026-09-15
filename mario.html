@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Miss Mario in Hotel Transylvania</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -12,6 +13,9 @@
     background: #05050f;
     font-family: 'Courier New', monospace;
     overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
   }
 
   #gameWrap {
@@ -54,6 +58,86 @@
     pointer-events: none;
     z-index: 2;
   }
+
+  /* ---------------- Touch controls (phones/tablets) ---------------- */
+  .touch-controls {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 5;
+    pointer-events: none;
+  }
+  @media (pointer: coarse) {
+    .touch-controls { display: block; }
+    #hint { display: none; } /* the keyboard hint doesn't apply on touch */
+  }
+
+  .touch-dpad, .touch-actions {
+    position: absolute;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    display: flex;
+    align-items: flex-end;
+    gap: 14px;
+    pointer-events: auto;
+  }
+  .touch-dpad { left: calc(16px + env(safe-area-inset-left, 0px)); }
+  .touch-actions { right: calc(16px + env(safe-area-inset-right, 0px)); }
+
+  .touch-btn {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 111, 168, 0.55);
+    background: rgba(20, 8, 28, 0.6);
+    color: #ffe6f2;
+    font-size: 22px;
+    font-family: 'Courier New', monospace;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    user-select: none;
+    touch-action: none;
+    box-shadow: 0 0 14px rgba(255, 111, 168, 0.35);
+  }
+  .touch-btn:active { background: rgba(255, 111, 168, 0.4); }
+  .touch-btn-down { width: 48px; height: 48px; font-size: 16px; opacity: 0.85; }
+  .touch-btn-jump {
+    width: 76px;
+    height: 76px;
+    font-size: 12px;
+    font-weight: bold;
+    letter-spacing: 0.05em;
+  }
+
+  /* ---------------- Portrait nudge (this is a side-scroller) ---------------- */
+  .rotate-hint { display: none; }
+  @media (pointer: coarse) and (orientation: portrait) {
+    .rotate-hint {
+      display: flex;
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      background: #05050f;
+      color: #ffe6f2;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      gap: 14px;
+      padding: 24px;
+    }
+    .rotate-icon {
+      font-size: 46px;
+      animation: rotateNudge 1.6s ease-in-out infinite;
+    }
+    @keyframes rotateNudge {
+      0%, 100% { transform: rotate(0deg); }
+      50% { transform: rotate(90deg); }
+    }
+    #gameWrap, .touch-controls { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -62,6 +146,22 @@
   <div id="title">MISS MARIO IN HOTEL TRANSYLVANIA &mdash; 10 LEVELS</div>
   <canvas id="game" width="800" height="480"></canvas>
   <div id="hint">Move: ← → / A D &nbsp;|&nbsp; Jump: Space / ↑ / W &nbsp;|&nbsp; Down: ↓ / S enters pipes &nbsp;|&nbsp; Stomp Goombas from above! &nbsp;|&nbsp; 10 levels, Easy → Extreme</div>
+</div>
+
+<div class="touch-controls" id="touchControls">
+  <div class="touch-dpad">
+    <button type="button" id="btnLeft" class="touch-btn" aria-label="Move left">&#9664;</button>
+    <button type="button" id="btnRight" class="touch-btn" aria-label="Move right">&#9654;</button>
+  </div>
+  <div class="touch-actions">
+    <button type="button" id="btnDown" class="touch-btn touch-btn-down" aria-label="Down / enter pipe">&#9660;</button>
+    <button type="button" id="btnJump" class="touch-btn touch-btn-jump" aria-label="Jump">JUMP</button>
+  </div>
+</div>
+
+<div class="rotate-hint">
+  <div class="rotate-icon">&#128241;</div>
+  <div>Rotate your device to landscape<br>for the best experience</div>
 </div>
 
 <script>
@@ -210,26 +310,54 @@
   let downKeyDown = false;
   let downEdge = false;
 
-  window.addEventListener('keydown', (e) => {
-    keys[e.key] = true;
-    if (bind.jump.includes(e.key)) {
-      e.preventDefault();
+  // Shared by real keydown/keyup events and the on-screen touch buttons
+  // below, so both input methods drive the exact same edge-triggered state.
+  function pressKey(key) {
+    keys[key] = true;
+    if (bind.jump.includes(key)) {
       if (!jumpKeyDown) jumpEdge = true;
       jumpKeyDown = true;
     }
-    if (bind.down.includes(e.key)) {
+    if (bind.down.includes(key)) {
       if (!downKeyDown) downEdge = true;
       downKeyDown = true;
     }
-    if ((state.mode === 'gameover' || state.mode === 'victory') && (e.key === 'Enter' || e.key === ' ')) resetGame();
+    if ((state.mode === 'gameover' || state.mode === 'victory') && (key === 'Enter' || key === ' ')) resetGame();
+  }
+  function releaseKey(key) {
+    keys[key] = false;
+    if (bind.jump.includes(key)) jumpKeyDown = false;
+    if (bind.down.includes(key)) downKeyDown = false;
+  }
+
+  window.addEventListener('keydown', (e) => {
+    if (bind.jump.includes(e.key)) e.preventDefault();
+    pressKey(e.key);
   });
   window.addEventListener('keyup', (e) => {
-    keys[e.key] = false;
-    if (bind.jump.includes(e.key)) jumpKeyDown = false;
-    if (bind.down.includes(e.key)) downKeyDown = false;
+    releaseKey(e.key);
   });
 
   function isDown(action) { return bind[action].some(k => keys[k]); }
+
+  // --- On-screen touch controls: each button presses/releases the same
+  // canonical key its keyboard binding uses (e.g. the jump button acts
+  // as ' '), so double-jump, pipe-entry, and restart-on-tap all just work. ---
+  function bindTouchButton(id, key) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const press = (e) => { e.preventDefault(); pressKey(key); };
+    const release = (e) => { e.preventDefault(); releaseKey(key); };
+    el.addEventListener('pointerdown', press);
+    el.addEventListener('pointerup', release);
+    el.addEventListener('pointercancel', release);
+    el.addEventListener('pointerleave', release);
+    el.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+  bindTouchButton('btnLeft', 'ArrowLeft');
+  bindTouchButton('btnRight', 'ArrowRight');
+  bindTouchButton('btnDown', 'ArrowDown');
+  bindTouchButton('btnJump', ' ');
 
   // ---------------------------------------------------------------------
   // Level geometry: solid platforms/ground as AABB rectangles

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Miss Mario in Hotel Transylvania</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -10,6 +10,8 @@
   html, body {
     height: 100%;
     background: #050308;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
   }
 
   .scene {
@@ -101,6 +103,7 @@
     color: #ffe6f2;
     box-shadow: 0 0 16px rgba(255, 111, 168, 0.55), inset 0 0 10px rgba(255, 111, 168, 0.15);
     text-shadow: 0 0 10px #ff4d8f, 0 0 22px #ff4d8f;
+    touch-action: manipulation;
   }
 
   .press-start:hover {
